@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crypto Scalping Paper Trading Bot</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- Google Fonts for modern typography -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Crypto Scalper Bot</h1>
+            <div class="status">
+                <span class="indicator pulse"></span> Live Paper Trading
+            </div>
+        </header>
+
+        <div class="dashboard-grid">
+            <!-- Portfolio Summary -->
+            <section class="card summary">
+                <h2>Portfolio Summary</h2>
+                <div class="balance-display">
+                    <span class="label">Available Balance</span>
+                    <span class="value" id="balance">$0.00</span>
+                </div>
+            </section>
+
+            <!-- Open Positions -->
+            <section class="card positions">
+                <h2>Open Positions</h2>
+                <div class="table-container">
+                    <table id="positionsTable">
+                        <thead>
+                            <tr>
+                                <th>Coin</th>
+                                <th>Amount</th>
+                                <th>Entry Price</th>
+                                <th>Strategy</th>
+                                <th>Time</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <!-- Populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Recent Trades -->
+            <section class="card trades">
+                <h2>Recent Trades</h2>
+                <div class="table-container">
+                    <table id="tradesTable">
+                        <thead>
+                            <tr>
+                                <th>Action</th>
+                                <th>Coin</th>
+                                <th>Price</th>
+                                <th>Strategy</th>
+                                <th>P/L</th>
+                                <th>Time</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <!-- Populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </div>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>
