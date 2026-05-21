@@ -70,7 +70,7 @@ h1 {
 
 .dashboard-grid {
     display: grid;
-    grid-template-columns: 1fr 2fr;
+    grid-template-columns: 1fr;
     gap: 1.5rem;
 }
 
@@ -89,16 +89,56 @@ h1 {
     transform: translateY(-2px);
 }
 
-.summary {
+.summary, .positions, .trades {
     grid-column: 1 / -1;
 }
 
-.positions {
-    grid-column: 1 / 2;
+.summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 1rem;
 }
 
-.trades {
-    grid-column: 2 / 3;
+.stat {
+    display: flex;
+    flex-direction: column;
+    background: rgba(15, 23, 42, 0.4);
+    padding: 1rem;
+    border-radius: 0.75rem;
+    border: 1px solid var(--glass-border);
+}
+
+.stat .label {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.5rem;
+}
+
+.stat .value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.last-update {
+    margin-left: 0.5rem;
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+}
+
+td.sl { color: #fca5a5; }
+td.tp { color: #6ee7b7; }
+td.empty {
+    text-align: center;
+    color: var(--text-secondary);
+    padding: 1.5rem;
+    font-style: italic;
+}
+
+th, td {
+    white-space: nowrap;
 }
 
 h2 {

@@ -1,1 +1,6 @@
-{"balance": 300, "positions": {}, "tradeHistory": []}
+{
+  "balance": 300,
+  "initialBalance": 300,
+  "positions": {},
+  "tradeHistory": []
+}

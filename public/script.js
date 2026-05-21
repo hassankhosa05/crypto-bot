@@ -1,60 +1,127 @@
+const fmtUSD = (n, digits = 2) => {
+    if (n === null || n === undefined || Number.isNaN(n)) return '-';
+    return `$${Number(n).toFixed(digits)}`;
+};
+const fmtPrice = n => fmtUSD(n, n < 1 ? 6 : 4);
+const fmtPct = n => {
+    if (n === null || n === undefined || Number.isNaN(n)) return '-';
+    const v = n * 100;
+    const sign = v > 0 ? '+' : '';
+    return `${sign}${v.toFixed(2)}%`;
+};
+const pnlClass = n => (n > 0 ? 'profit-positive' : n < 0 ? 'profit-negative' : '');
+const fmtTime = ts => {
+    if (!ts) return '-';
+    const d = typeof ts === 'number' ? new Date(ts) : new Date(ts);
+    return d.toLocaleTimeString();
+};
+
 async function updateDashboard() {
     try {
         const response = await fetch('/api/state');
         const state = await response.json();
 
-        // Update Balance
-        document.getElementById('balance').textContent = `$${state.balance.toFixed(2)}`;
+        const balance = Number(state.balance) || 0;
+        const initial = Number(state.initialBalance) || 0;
+        const positions = state.positions || {};
+        const prices = state.currentPrices || {};
+        const trades = state.tradeHistory || [];
 
-        // Update Positions
-        const positionsTable = document.getElementById('positionsTable').querySelector('tbody');
-        positionsTable.innerHTML = '';
-        
-        for (const [coin, position] of Object.entries(state.positions || {})) {
-            const row = document.createElement('tr');
-            const timeStr = new Date(position.timestamp).toLocaleTimeString();
-            row.innerHTML = `
-                <td>${coin}</td>
-                <td>${position.amount.toFixed(4)}</td>
-                <td>$${position.entryPrice.toFixed(4)}</td>
-                <td>${position.strategy}</td>
-                <td>${timeStr}</td>
-            `;
-            positionsTable.appendChild(row);
+        let invested = 0;
+        let marketValue = 0;
+        for (const [, position] of Object.entries(positions)) {
+            invested += position.costBasis ?? position.amount * position.entryPrice;
+        }
+        for (const [symbol, position] of Object.entries(positions)) {
+            const live = prices[symbol] ?? position.entryPrice;
+            marketValue += position.amount * live;
         }
 
-        // Update Trades (Show last 10)
-        const tradesTable = document.getElementById('tradesTable').querySelector('tbody');
-        tradesTable.innerHTML = '';
-        
-        const recentTrades = (state.tradeHistory || []).slice(-10).reverse();
-        
-        recentTrades.forEach(trade => {
-            const row = document.createElement('tr');
-            const isBuy = trade.action === 'BUY';
-            const actionClass = isBuy ? 'action-buy' : 'action-sell';
-            const pnlStr = isBuy ? '-' : (trade.pnl >= 0 ? `+$${trade.pnl.toFixed(2)}` : `-$${Math.abs(trade.pnl).toFixed(2)}`);
-            const pnlClass = isBuy ? '' : (trade.pnl >= 0 ? 'profit-positive' : 'profit-negative');
-            const timeStr = new Date(trade.timestamp).toLocaleTimeString();
+        const totalValue = balance + marketValue;
+        const totalPnl = totalValue - initial;
+        const totalPnlPct = initial > 0 ? totalPnl / initial : 0;
 
-            row.innerHTML = `
-                <td class="${actionClass}">${trade.action}</td>
-                <td>${trade.coin}</td>
-                <td>$${trade.price.toFixed(4)}</td>
-                <td>${trade.strategy}</td>
-                <td class="${pnlClass}">${pnlStr}</td>
-                <td>${timeStr}</td>
-            `;
-            tradesTable.appendChild(row);
-        });
+        document.getElementById('initialBalance').textContent = fmtUSD(initial);
+        document.getElementById('balance').textContent = fmtUSD(balance);
+        document.getElementById('invested').textContent = fmtUSD(invested);
+        document.getElementById('totalValue').textContent = fmtUSD(totalValue);
+        const pnlEl = document.getElementById('totalPnl');
+        pnlEl.textContent = `${fmtUSD(totalPnl)} (${fmtPct(totalPnlPct)})`;
+        pnlEl.className = `value ${pnlClass(totalPnl)}`;
 
+        const lastUpdateEl = document.getElementById('lastUpdate');
+        if (lastUpdateEl) {
+            lastUpdateEl.textContent = state.lastUpdate
+                ? `Updated ${new Date(state.lastUpdate).toLocaleTimeString()}`
+                : 'No price data yet';
+        }
+
+        // --- Open positions table ---
+        const positionsBody = document.querySelector('#positionsTable tbody');
+        positionsBody.innerHTML = '';
+        const positionEntries = Object.entries(positions);
+        if (positionEntries.length === 0) {
+            positionsBody.innerHTML = '<tr><td colspan="10" class="empty">No open positions</td></tr>';
+        } else {
+            for (const [symbol, position] of positionEntries) {
+                const currentPrice = prices[symbol] ?? position.entryPrice;
+                const movePct = (currentPrice - position.entryPrice) / position.entryPrice;
+                const unrealized = (currentPrice - position.entryPrice) * position.amount;
+                const stopLoss = position.stopLoss ?? position.entryPrice * (1 - (state.risk?.stopLossPct ?? 0.02));
+                const takeProfit = position.takeProfit ?? position.entryPrice * (1 + (state.risk?.takeProfitPct ?? 0.05));
+
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${symbol.toUpperCase()}</td>
+                    <td>${position.amount.toFixed(4)}</td>
+                    <td>${fmtPrice(position.entryPrice)}</td>
+                    <td>${fmtPrice(currentPrice)}</td>
+                    <td class="${pnlClass(movePct)}">${fmtPct(movePct)}</td>
+                    <td class="${pnlClass(unrealized)}">${fmtUSD(unrealized)}</td>
+                    <td class="sl">${fmtPrice(stopLoss)}</td>
+                    <td class="tp">${fmtPrice(takeProfit)}</td>
+                    <td>${position.strategy}</td>
+                    <td>${fmtTime(position.timestamp)}</td>
+                `;
+                positionsBody.appendChild(row);
+            }
+        }
+
+        // --- Recent trades table (last 20) ---
+        const tradesBody = document.querySelector('#tradesTable tbody');
+        tradesBody.innerHTML = '';
+        const recentTrades = trades.slice(-20).reverse();
+        if (recentTrades.length === 0) {
+            tradesBody.innerHTML = '<tr><td colspan="9" class="empty">No trades yet</td></tr>';
+        } else {
+            for (const trade of recentTrades) {
+                const isBuy = trade.action === 'BUY';
+                const actionClass = isBuy ? 'action-buy' : 'action-sell';
+                const pnl = trade.pnl;
+                const pnlPct = trade.pnlPct;
+                const pnlText = isBuy
+                    ? '-'
+                    : `${fmtUSD(pnl)} (${fmtPct(pnlPct)})`;
+
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${fmtTime(trade.timestamp)}</td>
+                    <td class="${actionClass}">${trade.action}</td>
+                    <td>${trade.coin.toUpperCase()}</td>
+                    <td>${fmtPrice(trade.entryPrice ?? trade.price)}</td>
+                    <td>${isBuy ? '-' : fmtPrice(trade.exitPrice ?? trade.price)}</td>
+                    <td>${Number(trade.amount).toFixed(4)}</td>
+                    <td>${trade.strategy}</td>
+                    <td>${trade.reason || (isBuy ? 'Strategy Signal' : '-')}</td>
+                    <td class="${isBuy ? '' : pnlClass(pnl)}">${pnlText}</td>
+                `;
+                tradesBody.appendChild(row);
+            }
+        }
     } catch (error) {
         console.error('Error fetching state:', error);
     }
 }
 
-// Initial update
 updateDashboard();
-
-// Poll every 5 seconds
 setInterval(updateDashboard, 5000);

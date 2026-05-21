@@ -1,18 +1,28 @@
 const fs = require('fs');
+const path = require('path');
+const { logTrade } = require('./tradeLogger');
 
-const STATE_FILE = 'portfolio.json';
+const STATE_FILE = path.join(__dirname, 'portfolio.json');
+
+const TAKE_PROFIT_PCT = 0.05; // 5% profit target
+const STOP_LOSS_PCT = 0.02;   // 2% stop loss
+const TRADE_FRACTION = 0.1;   // max 10% of starting balance per trade
+const MIN_TRADE_USD = 10;
 
 class PaperTrader {
-    constructor(initialBalance = 10000, googleSheetsLogger = null) {
-        this.logger = googleSheetsLogger;
-        this.state = this.loadState() || {
+    constructor(initialBalance = 300) {
+        const loaded = this.loadState();
+        this.state = loaded || {
             balance: initialBalance,
-            positions: {}, // { 'BTC': { amount: 1, entryPrice: 50000, strategy: 'RSI' } }
+            initialBalance,
+            positions: {},
             tradeHistory: []
         };
-        this.tradeLimitPerCoin = this.state.balance * 0.1; // Max 10% of balance per trade
-        this.takeProfitPercentage = 0.05; // 5% profit target
-        this.stopLossPercentage = 0.02; // 2% stop loss
+        // Ensure initialBalance is always present even on older state files.
+        if (this.state.initialBalance === undefined) {
+            this.state.initialBalance = initialBalance;
+            this.saveState();
+        }
     }
 
     loadState() {
@@ -26,84 +36,125 @@ class PaperTrader {
         fs.writeFileSync(STATE_FILE, JSON.stringify(this.state, null, 2));
     }
 
-    async executeTrade(coinSymbol, action, currentPrice, strategyName) {
+    tradeSizeUSD() {
+        // Sized off initial balance so position sizing stays consistent as P/L moves balance around.
+        return Math.min(this.state.initialBalance * TRADE_FRACTION, this.state.balance);
+    }
+
+    async executeTrade(coinSymbol, action, currentPrice, strategyName, reason = 'Strategy Signal') {
         if (action === 'BUY' && !this.state.positions[coinSymbol]) {
-            // Check if we have enough balance
-            const tradeAmountUSD = Math.min(this.tradeLimitPerCoin, this.state.balance);
-            if (tradeAmountUSD < 10) return; // Minimum trade size
+            const tradeAmountUSD = this.tradeSizeUSD();
+            if (tradeAmountUSD < MIN_TRADE_USD) return;
 
             const coinAmount = tradeAmountUSD / currentPrice;
-            
             this.state.balance -= tradeAmountUSD;
             this.state.positions[coinSymbol] = {
                 amount: coinAmount,
                 entryPrice: currentPrice,
+                costBasis: tradeAmountUSD,
                 strategy: strategyName,
+                stopLoss: currentPrice * (1 - STOP_LOSS_PCT),
+                takeProfit: currentPrice * (1 + TAKE_PROFIT_PCT),
                 timestamp: Date.now()
             };
 
-            const logMsg = `Bought ${coinAmount.toFixed(4)} ${coinSymbol} at $${currentPrice.toFixed(4)} using ${strategyName}`;
-            console.log(logMsg);
-            this.state.tradeHistory.push({ action: 'BUY', coin: coinSymbol, price: currentPrice, amount: coinAmount, strategy: strategyName, timestamp: new Date().toISOString() });
+            const timestamp = new Date().toISOString();
+            console.log(`BUY  ${coinSymbol.toUpperCase()} ${coinAmount.toFixed(4)} @ $${currentPrice.toFixed(6)} (${strategyName}, ${reason})`);
+            const historyEntry = {
+                action: 'BUY',
+                coin: coinSymbol,
+                price: currentPrice,
+                entryPrice: currentPrice,
+                amount: coinAmount,
+                strategy: strategyName,
+                reason,
+                timestamp
+            };
+            this.state.tradeHistory.push(historyEntry);
             this.saveState();
-            
-            if (this.logger) {
-                 await this.logger.logTrade('BUY', coinSymbol, currentPrice, null, strategyName, 0, 'Signal');
-            }
+            logTrade({
+                timestamp,
+                action: 'BUY',
+                coin: coinSymbol,
+                entryPrice: currentPrice,
+                exitPrice: null,
+                amount: coinAmount,
+                strategy: strategyName,
+                pnl: null,
+                pnlPct: null,
+                reason
+            });
+            return;
+        }
 
-        } else if (action === 'SELL' && this.state.positions[coinSymbol]) {
+        if (action === 'SELL' && this.state.positions[coinSymbol]) {
             const position = this.state.positions[coinSymbol];
             const sellValueUSD = position.amount * currentPrice;
-            const profitLoss = sellValueUSD - (position.amount * position.entryPrice);
-            const profitLossPct = profitLoss / (position.amount * position.entryPrice);
+            const pnl = sellValueUSD - position.costBasis;
+            const pnlPct = pnl / position.costBasis;
 
             this.state.balance += sellValueUSD;
             delete this.state.positions[coinSymbol];
 
-            const logMsg = `Sold ${position.amount.toFixed(4)} ${coinSymbol} at $${currentPrice.toFixed(4)}. P/L: $${profitLoss.toFixed(2)} (${(profitLossPct*100).toFixed(2)}%)`;
-            console.log(logMsg);
-            this.state.tradeHistory.push({ action: 'SELL', coin: coinSymbol, price: currentPrice, amount: position.amount, pnl: profitLoss, strategy: position.strategy, timestamp: new Date().toISOString() });
+            const timestamp = new Date().toISOString();
+            console.log(`SELL ${coinSymbol.toUpperCase()} ${position.amount.toFixed(4)} @ $${currentPrice.toFixed(6)} | P/L $${pnl.toFixed(2)} (${(pnlPct * 100).toFixed(2)}%) [${reason}]`);
+            const historyEntry = {
+                action: 'SELL',
+                coin: coinSymbol,
+                price: currentPrice,
+                entryPrice: position.entryPrice,
+                exitPrice: currentPrice,
+                amount: position.amount,
+                strategy: position.strategy,
+                pnl,
+                pnlPct,
+                reason,
+                timestamp
+            };
+            this.state.tradeHistory.push(historyEntry);
             this.saveState();
-
-            if (this.logger) {
-                await this.logger.logTrade('SELL', coinSymbol, position.entryPrice, currentPrice, position.strategy, profitLoss, 'Signal');
-            }
+            logTrade({
+                timestamp,
+                action: 'SELL',
+                coin: coinSymbol,
+                entryPrice: position.entryPrice,
+                exitPrice: currentPrice,
+                amount: position.amount,
+                strategy: position.strategy,
+                pnl,
+                pnlPct,
+                reason
+            });
         }
     }
 
     async checkRiskManagement(coinSymbol, currentPrice) {
-        if (!this.state.positions[coinSymbol]) return;
-
         const position = this.state.positions[coinSymbol];
+        if (!position) return false;
+
         const profitLossPct = (currentPrice - position.entryPrice) / position.entryPrice;
 
-        if (profitLossPct >= this.takeProfitPercentage) {
-            console.log(`Take Profit triggered for ${coinSymbol}`);
-            await this.executeTrade(coinSymbol, 'SELL', currentPrice, position.strategy);
-            if(this.logger && this.state.tradeHistory.length > 0) {
-                 // Update the last logged reason (hacky but works for this simple flow)
-                 // A better way is to pass reason to executeTrade
-            }
+        if (profitLossPct >= TAKE_PROFIT_PCT) {
+            await this.executeTrade(coinSymbol, 'SELL', currentPrice, position.strategy, 'Take Profit');
             return true;
         }
-
-        if (profitLossPct <= -this.stopLossPercentage) {
-            console.log(`Stop Loss triggered for ${coinSymbol}`);
-            await this.executeTrade(coinSymbol, 'SELL', currentPrice, position.strategy);
+        if (profitLossPct <= -STOP_LOSS_PCT) {
+            await this.executeTrade(coinSymbol, 'SELL', currentPrice, position.strategy, 'Stop Loss');
             return true;
         }
-
         return false;
     }
 
     getPortfolioValue(currentPrices) {
         let value = this.state.balance;
         for (const [symbol, position] of Object.entries(this.state.positions)) {
-            const currentPrice = currentPrices[symbol] || position.entryPrice;
-            value += position.amount * currentPrice;
+            const price = currentPrices[symbol] || position.entryPrice;
+            value += position.amount * price;
         }
         return value;
     }
 }
 
 module.exports = PaperTrader;
+module.exports.TAKE_PROFIT_PCT = TAKE_PROFIT_PCT;
+module.exports.STOP_LOSS_PCT = STOP_LOSS_PCT;
