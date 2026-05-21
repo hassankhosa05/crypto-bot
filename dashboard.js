@@ -3,8 +3,9 @@ const path = require('path');
 const fs = require('fs');
 const { TAKE_PROFIT_PCT, STOP_LOSS_PCT } = require('./paperTrader');
 
-const STATE_FILE = path.join(__dirname, 'portfolio.json');
-const PRICES_FILE = path.join(__dirname, 'currentPrices.json');
+const DATA_DIR = process.env.DATA_DIR || __dirname;
+const STATE_FILE = path.join(DATA_DIR, 'portfolio.json');
+const PRICES_FILE = path.join(DATA_DIR, 'currentPrices.json');
 
 function readJsonSafe(file, fallback) {
     try {
@@ -14,9 +15,11 @@ function readJsonSafe(file, fallback) {
     }
 }
 
-function startDashboard(port = 3000) {
+function startDashboard(port = process.env.PORT || 3000) {
     const app = express();
     app.use(express.static(path.join(__dirname, 'public')));
+
+    app.get('/ping', (req, res) => res.send('OK'));
 
     app.get('/api/state', (req, res) => {
         const state = readJsonSafe(STATE_FILE, {
@@ -37,7 +40,7 @@ function startDashboard(port = 3000) {
         });
     });
 
-    app.listen(port, () => {
+    app.listen(port, '0.0.0.0', () => {
         console.log(`Dashboard running at http://localhost:${port}`);
     });
 }

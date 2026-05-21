@@ -1,7 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 
-const CSV_PATH = path.join(__dirname, 'trades.csv');
+const DATA_DIR = process.env.DATA_DIR || __dirname;
+const CSV_PATH = path.join(DATA_DIR, 'trades.csv');
 const HEADER = 'timestamp,action,coin,entryPrice,exitPrice,amount,strategy,pnl,pnlPct,reason\n';
 
 function ensureFile() {

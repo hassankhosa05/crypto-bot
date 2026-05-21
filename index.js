@@ -18,7 +18,8 @@ const PaperTrader = require('./paperTrader');
 const { startDashboard } = require('./dashboard');
 
 const STARTING_BALANCE = 300;
-const PRICES_FILE = path.join(__dirname, 'currentPrices.json');
+const DATA_DIR = process.env.DATA_DIR || __dirname;
+const PRICES_FILE = path.join(DATA_DIR, 'currentPrices.json');
 
 const trader = new PaperTrader(STARTING_BALANCE);
 
@@ -106,7 +107,7 @@ async function runCycle() {
     console.log(chalk.blue('--- Cycle Complete ---'));
 }
 
-startDashboard(3000);
+startDashboard();
 
 runCycle().catch(err => console.error(chalk.red('Cycle error:'), err.message));
 

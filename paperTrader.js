@@ -2,7 +2,8 @@ const fs = require('fs');
 const path = require('path');
 const { logTrade } = require('./tradeLogger');
 
-const STATE_FILE = path.join(__dirname, 'portfolio.json');
+const DATA_DIR = process.env.DATA_DIR || __dirname;
+const STATE_FILE = path.join(DATA_DIR, 'portfolio.json');
 
 const TAKE_PROFIT_PCT = 0.05; // 5% profit target
 const STOP_LOSS_PCT = 0.02;   // 2% stop loss
