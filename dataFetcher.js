@@ -24,8 +24,8 @@ async function fetchMidCapCoins() {
         // Filter for $50M to $200M market cap
         const midCaps = response.data.filter(coin => coin.market_cap >= 50000000 && coin.market_cap <= 200000000);
         
-        // Return top 13
-        return midCaps.slice(0, 13).map(coin => ({
+        // Return top 10
+        return midCaps.slice(0, 10).map(coin => ({
             id: coin.id,
             symbol: coin.symbol.toUpperCase(),
             current_price: coin.current_price
