@@ -54,9 +54,11 @@ class PaperTrader {
                 return;
             }
 
-            const tradeAmountUSD = Math.min(this.tradeLimitPerCoin, this.state.balance);
-            if (tradeAmountUSD < 5) return; 
-
+            const riskUSD = this.state.balance * 0.01;
+            const stopDistance = Math.max(atr, currentPrice * 0.005);
+            let tradeAmountUSD = (riskUSD / stopDistance) * currentPrice;
+            tradeAmountUSD = Math.min(tradeAmountUSD, this.tradeLimitPerCoin, this.state.balance);
+            if(tradeAmountUSD < 5) return;
             const coinAmount = tradeAmountUSD / currentPrice;
             
             // Risk sizing based on ATR
@@ -72,6 +74,8 @@ class PaperTrader {
                 slPrice: slPrice,
                 tpPrice: tpPrice,
                 breakEvenTrigger: breakEvenTrigger,
+                trailingDistance: atr * 0.5,
+                entryAtr: atr,
                 strategy: strategyName,
                 timestamp: Date.now()
             };
@@ -120,6 +124,14 @@ class PaperTrader {
             return true;
         }
 
+        if(currentPrice > position.entryPrice + position.entryAtr){
+            const newStop = currentPrice - position.trailingDistance;
+            if(newStop > position.slPrice){
+                position.slPrice = newStop;
+                this.saveState();
+            }
+        }
+
         // 2. Take Profit (1.5R)
         if (currentPrice >= position.tpPrice) {
             console.log(`Take Profit triggered for ${coinSymbol}`);
@@ -139,6 +151,12 @@ class PaperTrader {
             console.log(`Break-Even triggered for ${coinSymbol}. Moving SL to Entry Price.`);
             position.slPrice = position.entryPrice;
             this.saveState();
+        }
+
+        const heldMinutes = (Date.now() - position.timestamp) / 60000;
+        if(heldMinutes >= 100){
+            await this.executeTrade(coinSymbol, 'SELL', currentPrice, position.strategy, 'Time Exit');
+            return true;
         }
 
         return false;
