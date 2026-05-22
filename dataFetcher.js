@@ -36,40 +36,15 @@ async function fetchMidCapCoins() {
 // For CoinGecko, /ohlc endpoint gives 30min candles if days=1
 async function fetchHistoricalData(coinId) {
     try {
-        // We use the market_chart endpoint to get enough data for EMA50
-        // 'days=1' gives 5-minute data
-        // 'days=14' gives 1-hour data
         const response = await axios.get(`https://api.coingecko.com/api/v3/coins/${coinId}/ohlc`, {
             params: {
                 vs_currency: 'usd',
                 days: 1 // 1 day gives 30-minute candles on CoinGecko API (usually 48 data points).
-                // Note: If you need 100+ points for a solid EMA50, you might need days=7 which gives 4hr candles.
-                // For this example, let's assume we use days=7 to get 4hr data (42 points), 
-                // or we use binance API for better granular data if needed.
             }
         });
 
-        // CoinGecko OHLC format: [ [time, open, high, low, close], ... ]
-        // Note: CoinGecko OHLC doesn't include volume in this endpoint.
-        // We will mock volume using random variation for the sake of the volume filter
-        // If you connect Binance API, you will get real volume.
-        
         const data = response.data;
-        if (!data || data.length < 50) {
-            // Need at least 50 points for EMA50
-             const responseLonger = await axios.get(`https://api.coingecko.com/api/v3/coins/${coinId}/ohlc`, {
-                params: { vs_currency: 'usd', days: 7 } // Get 4hr candles
-            });
-            return responseLonger.data.map(d => ({
-                timestamp: d[0],
-                open: d[1],
-                high: d[2],
-                low: d[3],
-                close: d[4],
-                volume: Math.random() * 1000000 + 500000 // Mocking volume for CoinGecko OHLC limitation
-            }));
-        }
-
+        
         return data.map(d => ({
             timestamp: d[0],
             open: d[1],

@@ -9,8 +9,8 @@ const { EMA, MACD, RSI, BollingerBands, ATR } = require('technicalindicators');
  * @returns {Object} { signal: 'BUY' | 'SELL' | 'HOLD' | 'NO TRADE', score: number, reason: string, atr: number }
  */
 function evaluateTrade(coin, historicalData) {
-    if (historicalData.length < 50) {
-        return { signal: 'NO TRADE', score: 0, reason: 'Not enough data (needs 50+ periods)', atr: 0 };
+    if (historicalData.length < 45) {
+        return { signal: 'NO TRADE', score: 0, reason: 'Not enough data (needs 45+ periods)', atr: 0 };
     }
 
     const closes = historicalData.map(d => d.close);
@@ -22,7 +22,7 @@ function evaluateTrade(coin, historicalData) {
     // --- Calculate Indicators ---
     const ema9 = EMA.calculate({ period: 9, values: closes });
     const ema21 = EMA.calculate({ period: 21, values: closes });
-    const ema50 = EMA.calculate({ period: 50, values: closes });
+    const ema45 = EMA.calculate({ period: 45, values: closes });
     
     const macdInput = { values: closes, fastPeriod: 12, slowPeriod: 26, signalPeriod: 9, SimpleMAOscillator: false, SimpleMASignal: false };
     const macdResult = MACD.calculate(macdInput);
@@ -36,8 +36,8 @@ function evaluateTrade(coin, historicalData) {
     const prevEma9 = ema9[ema9.length - 2];
     const currentEma21 = ema21[ema21.length - 1];
     const prevEma21 = ema21[ema21.length - 2];
-    const currentEma50 = ema50[ema50.length - 1];
-    const prevEma50 = ema50[ema50.length - 2];
+    const currentEma45 = ema45[ema45.length - 1];
+    const prevEma45 = ema45[ema45.length - 2];
 
     const currentMacd = macdResult[macdResult.length - 1];
     const prevMacd = macdResult[macdResult.length - 2];
@@ -48,10 +48,10 @@ function evaluateTrade(coin, historicalData) {
 
     // --- 1. CORE FILTERS (MUST PASS) ---
     
-    // Trend Filter: Price > EMA50 AND EMA50 slope positive
-    const isUptrend = currentPrice > currentEma50 && currentEma50 > prevEma50;
+    // Trend Filter: Price > EMA45 AND EMA45 slope positive
+    const isUptrend = currentPrice > currentEma45 && currentEma45 > prevEma45;
     if (!isUptrend) {
-        return { signal: 'NO TRADE', score: 0, reason: 'Failed Trend Filter (Below EMA50 or EMA50 pointing down)', atr: currentAtr };
+        return { signal: 'NO TRADE', score: 0, reason: 'Failed Trend Filter (Below EMA45 or EMA45 pointing down)', atr: currentAtr };
     }
 
     // Volume Filter: Current volume > 20-bar average volume
@@ -79,9 +79,9 @@ function evaluateTrade(coin, historicalData) {
         scoreReasons.push('EMA 9/21 Cross (+3)');
     }
 
-    // MACD histogram flips negative to positive AND price > EMA50
+    // MACD histogram flips negative to positive AND price > EMA45
     const macdFlipPositive = prevMacd.histogram <= 0 && currentMacd.histogram > 0;
-    if (macdFlipPositive && currentPrice > currentEma50) {
+    if (macdFlipPositive && currentPrice > currentEma45) {
         score += 2;
         scoreReasons.push('MACD Flip (+2)');
     }

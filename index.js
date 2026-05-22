@@ -34,7 +34,7 @@ async function runCycle() {
     // 2. Analyze & Trade each coin
     for (const coin of coins) {
         // Respect API rate limits
-        await delay(5000); 
+        await delay(10000); 
 
         const historicalData = await fetchHistoricalData(coin.id);
         if (!historicalData) continue;
