@@ -1,117 +1,76 @@
 require('dotenv').config();
-const fs = require('fs');
-const path = require('path');
 const schedule = require('node-schedule');
 const chalk = require('chalk');
-const {
-    fetchMidCapCoins,
-    fetchCurrentPrices,
-    getHistoricalData,
-    bumpCycle
-} = require('./dataFetcher');
-const {
-    executeBollingerStrategy,
-    executeEmaCrossStrategy,
-    executeMacdStrategy
-} = require('./strategies');
+const { fetchMidCapCoins, fetchHistoricalData, delay } = require('./dataFetcher');
+const { evaluateTrade, checkEmergencyExit } = require('./strategies');
 const PaperTrader = require('./paperTrader');
 const { startDashboard } = require('./dashboard');
 
-const STARTING_BALANCE = 300;
-const DATA_DIR = process.env.DATA_DIR || __dirname;
-const PRICES_FILE = path.join(DATA_DIR, 'currentPrices.json');
-
-const trader = new PaperTrader(STARTING_BALANCE);
-
-function writeCurrentPrices(pricesBySymbol) {
-    fs.writeFileSync(
-        PRICES_FILE,
-        JSON.stringify({ prices: pricesBySymbol, lastUpdate: new Date().toISOString() }, null, 2)
-    );
-}
+const trader = new PaperTrader(300); // Start with $300 simulated balance
 
 async function runCycle() {
-    bumpCycle();
     console.log(chalk.blue(`\n--- Starting Cycle: ${new Date().toISOString()} ---`));
-
+    
+    // 1. Fetch Coins
     const coins = await fetchMidCapCoins();
     if (coins.length === 0) {
         console.log(chalk.red('No coins fetched. Skipping cycle.'));
         return;
     }
 
-    // One bulk request for live prices instead of one per coin.
-    console.log(chalk.gray(`Fetching current prices for ${coins.length} coins (1 request)...`));
-    const livePrices = await fetchCurrentPrices(coins.map(c => c.id));
-
-    // Build symbol-keyed price map for portfolio valuation + dashboard.
-    const pricesBySymbol = {};
+    const currentPrices = {};
     for (const coin of coins) {
-        const live = livePrices[coin.id];
-        const price = live ? live.price : coin.current_price;
-        coin.current_price = price; // overwrite stale list price with bulk-call price
-        pricesBySymbol[coin.symbol] = price;
+        currentPrices[coin.symbol] = coin.current_price;
     }
-    // Include any open positions whose coins fell out of the top-20 list so the dashboard still values them.
-    for (const symbol of Object.keys(trader.state.positions)) {
-        if (!(symbol in pricesBySymbol)) {
-            pricesBySymbol[symbol] = trader.state.positions[symbol].entryPrice;
-        }
-    }
-    writeCurrentPrices(pricesBySymbol);
+    
+    // Update live prices in state so dashboard can see them
+    trader.state.currentPrices = currentPrices;
+    trader.saveState();
 
-    console.log(chalk.cyan(`Portfolio Value: $${trader.getPortfolioValue(pricesBySymbol).toFixed(2)} | Cash: $${trader.state.balance.toFixed(2)}`));
+    console.log(chalk.cyan(`Current Portfolio Value: $${trader.getPortfolioValue(currentPrices).toFixed(2)}`));
+    console.log(chalk.cyan(`Available Balance: $${trader.state.balance.toFixed(2)}`));
+    console.log(chalk.cyan(`Daily Losses: ${trader.state.dailyLosses}/3`));
 
+    // 2. Analyze & Trade each coin
     for (const coin of coins) {
-        // Risk management first — uses the live price we just fetched.
-        const riskTriggered = await trader.checkRiskManagement(coin.symbol, coin.current_price);
-        if (riskTriggered) continue;
+        // Respect API rate limits
+        await delay(5000); 
 
-        const historicalData = await getHistoricalData(coin.id, coin.current_price);
+        const historicalData = await fetchHistoricalData(coin.id);
         if (!historicalData) continue;
 
-        // Bollinger Bands
-        const bbSignal = executeBollingerStrategy(historicalData);
-        if (bbSignal === 'BUY') {
-            await trader.executeTrade(coin.symbol, 'BUY', coin.current_price, 'Bollinger Bands');
-            continue;
-        }
-        if (bbSignal === 'SELL' && trader.state.positions[coin.symbol]?.strategy === 'Bollinger Bands') {
-            await trader.executeTrade(coin.symbol, 'SELL', coin.current_price, 'Bollinger Bands');
-            continue;
+        // Check if we have an open position
+        if (trader.state.positions[coin.symbol]) {
+            // First check Risk Management (SL, TP, Break-even)
+            // Also pass in the emergency exit check
+            const emergencyExitFlag = checkEmergencyExit(historicalData);
+            await trader.checkRiskManagement(coin.symbol, coin.current_price, emergencyExitFlag);
+            continue; // If we already own it, we manage risk, we don't buy more.
         }
 
-        // EMA 9/21 Cross
-        const emaSignal = executeEmaCrossStrategy(historicalData);
-        if (emaSignal === 'BUY') {
-            await trader.executeTrade(coin.symbol, 'BUY', coin.current_price, 'EMA Cross');
-            continue;
-        }
-        if (emaSignal === 'SELL' && trader.state.positions[coin.symbol]?.strategy === 'EMA Cross') {
-            await trader.executeTrade(coin.symbol, 'SELL', coin.current_price, 'EMA Cross');
-            continue;
-        }
+        // We do NOT have an open position. Run the Confluence Decision Engine.
+        const decision = evaluateTrade(coin, historicalData);
 
-        // MACD Momentum
-        const macdSignal = executeMacdStrategy(historicalData);
-        if (macdSignal === 'BUY') {
-            await trader.executeTrade(coin.symbol, 'BUY', coin.current_price, 'MACD Momentum');
-            continue;
-        }
-        if (macdSignal === 'SELL' && trader.state.positions[coin.symbol]?.strategy === 'MACD Momentum') {
-            await trader.executeTrade(coin.symbol, 'SELL', coin.current_price, 'MACD Momentum');
-            continue;
+        if (decision.signal === 'BUY') {
+            // executeTrade signature: coinSymbol, action, currentPrice, strategyName, reason, atr
+            await trader.executeTrade(coin.symbol, 'BUY', coin.current_price, 'Confluence Engine', decision.reason, decision.atr);
+        } else {
+            // Uncomment the next line if you want to log holds and no-trades to console (can be noisy)
+            // console.log(`[${coin.symbol}] ${decision.reason}`);
         }
     }
-
-    console.log(chalk.blue('--- Cycle Complete ---'));
+    
+    console.log(chalk.blue(`--- Cycle Complete ---`));
 }
 
-startDashboard();
+// Start Dashboard
+startDashboard(3000);
 
-runCycle().catch(err => console.error(chalk.red('Cycle error:'), err.message));
+// Run immediately once
+runCycle();
 
-schedule.scheduleJob('*/3 * * * *', () => {
-    runCycle().catch(err => console.error(chalk.red('Cycle error:'), err.message));
+// Schedule every 5 minutes
+const job = schedule.scheduleJob('*/5 * * * *', function(){
+  runCycle();
 });
-console.log(chalk.green('Bot started and scheduled to run every 3 minutes.'));
+console.log(chalk.green('Bot started and scheduled to run every 5 minutes.'));
