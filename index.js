@@ -69,8 +69,8 @@ startDashboard(3000);
 // Run immediately once
 runCycle();
 
-// Schedule every 5 minutes
-const job = schedule.scheduleJob('*/5 * * * *', function(){
+// Schedule every 1 hour
+const job = schedule.scheduleJob('0 * * * *', function(){
   runCycle();
 });
-console.log(chalk.green('Bot started and scheduled to run every 5 minutes.'));
+console.log(chalk.green('Bot started and scheduled to run every 1 hour.'));

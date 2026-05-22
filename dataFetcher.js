@@ -7,7 +7,7 @@ async function delay(ms) {
 // Fetch top 20 mid-cap coins ($50M - $200M market cap)
 async function fetchMidCapCoins() {
     try {
-        const response = await axios.get('https://api.coingecko.com/api/v3/coins/markets', {
+        const config = {
             params: {
                 vs_currency: 'usd',
                 order: 'market_cap_desc',
@@ -15,13 +15,17 @@ async function fetchMidCapCoins() {
                 page: 1,
                 sparkline: false
             }
-        });
+        };
+        if (process.env.COINGECKO_API_KEY) {
+            config.headers = { 'x-cg-demo-api-key': process.env.COINGECKO_API_KEY };
+        }
+        const response = await axios.get('https://api.coingecko.com/api/v3/coins/markets', config);
 
         // Filter for $50M to $200M market cap
         const midCaps = response.data.filter(coin => coin.market_cap >= 50000000 && coin.market_cap <= 200000000);
         
-        // Return top 20
-        return midCaps.slice(0, 20).map(coin => ({
+        // Return top 13
+        return midCaps.slice(0, 13).map(coin => ({
             id: coin.id,
             symbol: coin.symbol.toUpperCase(),
             current_price: coin.current_price
@@ -36,12 +40,16 @@ async function fetchMidCapCoins() {
 // For CoinGecko, /ohlc endpoint gives 30min candles if days=1
 async function fetchHistoricalData(coinId) {
     try {
-        const response = await axios.get(`https://api.coingecko.com/api/v3/coins/${coinId}/ohlc`, {
+        const config = {
             params: {
                 vs_currency: 'usd',
                 days: 1 // 1 day gives 30-minute candles on CoinGecko API (usually 48 data points).
             }
-        });
+        };
+        if (process.env.COINGECKO_API_KEY) {
+            config.headers = { 'x-cg-demo-api-key': process.env.COINGECKO_API_KEY };
+        }
+        const response = await axios.get(`https://api.coingecko.com/api/v3/coins/${coinId}/ohlc`, config);
 
         const data = response.data;
         
