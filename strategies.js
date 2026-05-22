@@ -34,8 +34,13 @@ function evaluateTrade(coin, historicalData) {
     // Get current (latest) indicator values
     const currentEma9 = ema9[ema9.length - 1];
     const prevEma9 = ema9[ema9.length - 2];
+    const ema9_2barsAgo = ema9[ema9.length - 3];
+    const ema9_3barsAgo = ema9[ema9.length - 4];
+
     const currentEma21 = ema21[ema21.length - 1];
     const prevEma21 = ema21[ema21.length - 2];
+    const ema21_2barsAgo = ema21[ema21.length - 3];
+    const ema21_3barsAgo = ema21[ema21.length - 4];
     const currentEma45 = ema45[ema45.length - 1];
     const prevEma45 = ema45[ema45.length - 2];
 
@@ -54,12 +59,12 @@ function evaluateTrade(coin, historicalData) {
         return { signal: 'NO TRADE', score: 0, reason: 'Failed Trend Filter (Below EMA45 or EMA45 pointing down)', atr: currentAtr };
     }
 
-    // Volume Filter: Current volume > 20-bar average volume
+    // Volume Filter: Current volume > 85% of 20-bar average volume
     const vol20 = volumes.slice(-20);
     const avgVol20 = vol20.reduce((a, b) => a + b, 0) / 20;
     const currentVolume = volumes[volumes.length - 1];
-    if (currentVolume <= avgVol20) {
-        return { signal: 'NO TRADE', score: 0, reason: 'Failed Volume Filter (Volume too low)', atr: currentAtr };
+    if (currentVolume <= avgVol20 * 0.85) {
+        return { signal: 'NO TRADE', score: 0, reason: 'Failed Volume Filter (Volume < 85% of average)', atr: currentAtr };
     }
 
     // Liquidity Heatmap Filter (Placeholder)
@@ -72,9 +77,15 @@ function evaluateTrade(coin, historicalData) {
     let score = 0;
     const scoreReasons = [];
 
-    // EMA9 crosses above EMA21
-    const emaCrossUp = prevEma9 <= prevEma21 && currentEma9 > currentEma21;
-    if (emaCrossUp) {
+    // EMA9 crosses above EMA21 within the last 3 candles
+    const crossNow = prevEma9 <= prevEma21 && currentEma9 > currentEma21;
+    const cross1BarAgo = ema9_2barsAgo <= ema21_2barsAgo && prevEma9 > prevEma21;
+    const cross2BarsAgo = ema9_3barsAgo <= ema21_3barsAgo && ema9_2barsAgo > ema21_2barsAgo;
+    
+    const recentCross = crossNow || cross1BarAgo || cross2BarsAgo;
+    const emaBullish = currentEma9 > currentEma21;
+
+    if (recentCross && emaBullish) {
         score += 3;
         scoreReasons.push('EMA 9/21 Cross (+3)');
     }
@@ -92,15 +103,16 @@ function evaluateTrade(coin, historicalData) {
         scoreReasons.push('RSI Mid (+1)');
     }
 
-    // Bollinger lower-band bounce AND RSI 35-45 (Only evaluated if trend passed, which it has by this point)
-    const touchedLowerBand = currentPrice <= currentBb.lower;
+    // Bollinger lower-band true bounce AND RSI 35-45
+    const prevClose = closes[closes.length - 2];
+    const touchedLowerBand = prevClose <= currentBb.lower && currentPrice > currentBb.lower;
     if (touchedLowerBand && currentRsi >= 35 && currentRsi <= 45) {
         score += 1;
         scoreReasons.push('Bollinger Bounce (+1)');
     }
 
     // --- 3. DECISION ---
-    if (score >= 4) {
+    if (emaBullish && recentCross && score >= 4) {
         return { signal: 'BUY', score, reason: `BUY (Score: ${score}) - ` + scoreReasons.join(', '), atr: currentAtr };
     } else if (score >= 3) {
         return { signal: 'HOLD', score, reason: `HOLD (Score: ${score}) - Not enough confluence`, atr: currentAtr };

@@ -12,10 +12,12 @@ class PaperTrader {
             tradeHistory: [],
             currentPrices: {},
             dailyLosses: 0,
+            dailyDrawdownUSD: 0,
             lastLossDate: new Date().toDateString()
         };
         if (!this.state.initialBalance) this.state.initialBalance = 300;
         if (this.state.dailyLosses === undefined) this.state.dailyLosses = 0;
+        if (this.state.dailyDrawdownUSD === undefined) this.state.dailyDrawdownUSD = 0;
         if (!this.state.lastLossDate) this.state.lastLossDate = new Date().toDateString();
         
         this.tradeLimitPerCoin = this.state.initialBalance * 0.1; // Max 10% per trade
@@ -37,6 +39,7 @@ class PaperTrader {
         const today = new Date().toDateString();
         if (this.state.lastLossDate !== today) {
             this.state.dailyLosses = 0;
+            this.state.dailyDrawdownUSD = 0;
             this.state.lastLossDate = today;
             this.saveState();
         }
@@ -46,8 +49,8 @@ class PaperTrader {
         this.resetDailyLossesIfNewDay();
 
         if (action === 'BUY' && !this.state.positions[coinSymbol]) {
-            if (this.state.dailyLosses >= 3) {
-                console.log(`Daily max losses reached (3). Skipping BUY for ${coinSymbol}.`);
+            if (this.state.dailyLosses >= 3 || this.state.dailyDrawdownUSD >= this.state.initialBalance * 0.05) {
+                console.log(`Daily max losses (3) or drawdown (5%) reached. Skipping BUY for ${coinSymbol}.`);
                 return;
             }
 
@@ -57,10 +60,10 @@ class PaperTrader {
             const coinAmount = tradeAmountUSD / currentPrice;
             
             // Risk sizing based on ATR
-            const riskPerCoin = atr * 1.2;
+            const riskPerCoin = atr; // 1.0 ATR Stop Loss
             const slPrice = currentPrice - riskPerCoin;
-            const tpPrice = currentPrice + (riskPerCoin * 1.5); // 1.5R Take Profit
-            const breakEvenTrigger = currentPrice + riskPerCoin; // +1R
+            const tpPrice = currentPrice + (atr * 2.0); // 2.0 ATR Take Profit
+            const breakEvenTrigger = currentPrice + atr; // +1 ATR Trailing Break-Even
 
             this.state.balance -= tradeAmountUSD;
             this.state.positions[coinSymbol] = {
@@ -89,6 +92,7 @@ class PaperTrader {
             // Check if it's a loss for daily protection
             if (profitLoss < 0) {
                 this.state.dailyLosses += 1;
+                this.state.dailyDrawdownUSD += Math.abs(profitLoss);
             }
 
             this.state.balance += sellValueUSD;
