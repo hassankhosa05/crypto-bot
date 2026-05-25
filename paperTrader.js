@@ -19,8 +19,6 @@ class PaperTrader {
         if (this.state.dailyLosses === undefined) this.state.dailyLosses = 0;
         if (this.state.dailyDrawdownUSD === undefined) this.state.dailyDrawdownUSD = 0;
         if (!this.state.lastLossDate) this.state.lastLossDate = new Date().toDateString();
-        
-        this.tradeLimitPerCoin = this.state.initialBalance * 0.3; // Max 30% per trade
     }
 
     loadState() {
@@ -57,14 +55,15 @@ class PaperTrader {
             const riskUSD = this.state.balance * 0.01;
             const stopDistance = Math.max(atr, currentPrice * 0.005);
             let tradeAmountUSD = (riskUSD / stopDistance) * currentPrice;
-            tradeAmountUSD = Math.min(tradeAmountUSD, this.tradeLimitPerCoin, this.state.balance);
+            const tradeLimitPerCoin = this.state.balance * 0.2;
+            tradeAmountUSD = Math.min(tradeAmountUSD, tradeLimitPerCoin, this.state.balance);
             if(tradeAmountUSD < 5) return;
             const coinAmount = tradeAmountUSD / currentPrice;
-            
+
             // Risk sizing based on ATR
             const riskPerCoin = atr; // 1.0 ATR Stop Loss
             const slPrice = currentPrice - riskPerCoin;
-            const tpPrice = currentPrice + (atr * 2.0); // 2.0 ATR Take Profit
+            const tpPrice = currentPrice + (atr * 2.2); // 2.2 ATR Take Profit
             const breakEvenTrigger = currentPrice + atr; // +1 ATR Trailing Break-Even
 
             this.state.balance -= tradeAmountUSD;
@@ -154,7 +153,7 @@ class PaperTrader {
         }
 
         const heldMinutes = (Date.now() - position.timestamp) / 60000;
-        if(heldMinutes >= 100){
+        if(heldMinutes >= 60){
             await this.executeTrade(coinSymbol, 'SELL', currentPrice, position.strategy, 'Time Exit');
             return true;
         }

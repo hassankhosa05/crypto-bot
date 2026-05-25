@@ -54,7 +54,9 @@ async function startBot() {
             streamNames.push(`${coin.symbol.toLowerCase()}@kline_5m`);
             
             // Calculate and cache initial emergency exit flag
-            emergencyExitCache[coin.symbol] = checkEmergencyExit(historicalData);
+            // emergencyExitCache[coin.symbol] = checkEmergencyExit(historicalData);
+            const initPosition = trader.state.positions[coin.symbol];
+            emergencyExitCache[coin.symbol] = checkEmergencyExit(historicalData,initPosition?.entryPrice,initPosition?.atr);
         }
     }
     
@@ -121,7 +123,13 @@ async function startBot() {
                 }
                 
                 // Recalculate and cache emergency exit flag only when candle closes
-                emergencyExitCache[symbol] = checkEmergencyExit(historicalDataStore[symbol]);
+                // emergencyExitCache[symbol] = checkEmergencyExit(historicalDataStore[symbol]);
+                const position = trader.state.positions[symbol];
+                emergencyExitCache[symbol] = checkEmergencyExit(
+                    historicalDataStore[symbol],
+                    position?.entryPrice,
+                    position?.atr
+                );
             }
 
             // 2. Execute Strategy if we don't have a position

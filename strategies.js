@@ -64,8 +64,8 @@ function evaluateTrade(coin, historicalData) {
     const vol20 = volumes.slice(-20);
     const avgVol20 = vol20.reduce((a, b) => a + b, 0) / 20;
     const currentVolume = volumes[volumes.length - 1];
-    if (currentVolume <= avgVol20 * 0.85) {
-        return { signal: 'NO TRADE', score: 0, reason: 'Failed Volume Filter (Volume < 85% of average)', atr: currentAtr };
+    if (currentVolume <= avgVol20 * 1.05) {
+        return { signal: 'NO TRADE', score: 0, reason: 'Volume below conviction threshold', atr: currentAtr };
     }
 
     // Liquidity Heatmap Filter (Placeholder)
@@ -74,7 +74,11 @@ function evaluateTrade(coin, historicalData) {
          return { signal: 'NO TRADE', score: 0, reason: 'Failed Heatmap Filter (Major sell wall overhead)', atr: currentAtr };
     }
 
-    const estimatedSpreadPct = coin.spreadPct || 0.0001;
+    if (coin.spreadPct === undefined) {
+        return { signal:'NO TRADE', score:0, reason:'Missing spread data', atr:currentAtr };
+    }
+
+    const estimatedSpreadPct = coin.spreadPct;
     const atrPct = currentAtr / currentPrice;
     if (estimatedSpreadPct > atrPct * 0.20) {
         return { signal: 'NO TRADE', score: 0, reason: 'Spread too large', atr: currentAtr };
@@ -88,18 +92,18 @@ function evaluateTrade(coin, historicalData) {
     const crossNow = prevEma9 <= prevEma21 && currentEma9 > currentEma21;
     const cross1BarAgo = ema9_2barsAgo <= ema21_2barsAgo && prevEma9 > prevEma21;
     const cross2BarsAgo = ema9_3barsAgo <= ema21_3barsAgo && ema9_2barsAgo > ema21_2barsAgo;
-    
+
     const recentCross = crossNow || cross1BarAgo || cross2BarsAgo;
     const emaBullish = currentEma9 > currentEma21;
 
     if (recentCross && emaBullish) {
-        score += 3;
+        score += 2;
         if(crossNow){
-            score += 0.5;
+            score += 1;
         } else if(cross1BarAgo){
-            score += 0.3;
+            score += 0.6;
         } else {
-            score += 0.1;
+            score += 0.3;
         }
         scoreReasons.push('EMA Momentum');
     }
@@ -121,12 +125,12 @@ function evaluateTrade(coin, historicalData) {
     const prevClose = closes[closes.length - 2];
     const touchedLowerBand = prevBb && prevClose <= prevBb.lower && currentPrice > currentBb.lower;
     if (touchedLowerBand && currentRsi >= 35 && currentRsi <= 48) {
-        score += 1;
-        scoreReasons.push('Bollinger Bounce (+1)');
+        score += 1.5;
+        scoreReasons.push('Bollinger Bounce (+1.5)');
     }
 
     // --- 3. DECISION ---
-    if (emaBullish && recentCross && score >= 5) {
+    if (emaBullish && recentCross && macdBullish && score >= 5.5) {
         return {
             signal: 'BUY',
             score,
@@ -144,10 +148,17 @@ function evaluateTrade(coin, historicalData) {
  * Emergency Exit Check
  * Used to close an open position early if market turns hostile.
  */
-function checkEmergencyExit(historicalData) {
-    if (historicalData.length < 34) return false; // Needs at least 34 bars for stable MACD histogram
-    
+function checkEmergencyExit(historicalData, entryPrice, currentAtr) {
+    if (historicalData.length < 34) return false;
+
     const closes = historicalData.map(d => d.close);
+    const currentPrice = closes[closes.length - 1];
+
+    // Hard ATR stop — exits immediately, doesn't wait for indicator confirmation
+    if (currentAtr && entryPrice && currentPrice < entryPrice - (currentAtr * 1.5)) {
+        return true;
+    }
+
     const ema9 = EMA.calculate({ period: 9, values: closes });
     const ema21 = EMA.calculate({ period: 21, values: closes });
     
@@ -164,11 +175,7 @@ function checkEmergencyExit(historicalData) {
 
     if (!currentMacd || !prevMacd) return false;
 
-    // EMA9 crosses below EMA21
     const emaCrossDown = prevEma9 >= prevEma21 && currentEma9 < currentEma21;
-    
-    // Relaxed Emergency Exit: Only exit if EMA9 crosses below EMA21 AND MACD is bearish (histogram < 0)
-    // This reduces false exits due to noise on minor pullbacks.
     const macdIsBearish = currentMacd.histogram < 0;
 
     return emaCrossDown && macdIsBearish;
