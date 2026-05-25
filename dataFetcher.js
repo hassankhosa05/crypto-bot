@@ -4,66 +4,57 @@ async function delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// Fetch top 20 mid-cap coins ($50M - $200M market cap)
+// Fetch top 30 USDT pairs by 24h volume from Binance
 async function fetchMidCapCoins() {
     try {
-        const config = {
-            params: {
-                vs_currency: 'usd',
-                order: 'market_cap_desc',
-                per_page: 250, // Fetch top 250, then filter
-                page: 1,
-                sparkline: false
-            }
-        };
-        if (process.env.COINGECKO_API_KEY) {
-            config.headers = { 'x-cg-demo-api-key': process.env.COINGECKO_API_KEY };
-        }
-        const response = await axios.get('https://api.coingecko.com/api/v3/coins/markets', config);
-
-        // Filter for $50M to $200M market cap
-        const midCaps = response.data.filter(coin => coin.market_cap >= 50000000 && coin.market_cap <= 200000000);
+        const response = await axios.get('https://api.binance.com/api/v3/ticker/24hr');
         
-        // Return top 10
-        return midCaps.slice(0, 10).map(coin => ({
-            id: coin.id,
-            symbol: coin.symbol.toUpperCase(),
-            current_price: coin.current_price
+        // Filter for USDT pairs, excluding standard stablecoins
+        const usdtPairs = response.data.filter(coin => 
+            coin.symbol.endsWith('USDT') && 
+            !['USDCUSDT', 'FDUSDUSDT', 'TUSDUSDT', 'EURUSDT'].includes(coin.symbol) &&
+            parseFloat(coin.lastPrice) > 0 // Ensure it's actively trading
+        );
+
+        // Sort by quoteVolume (highest liquidity)
+        usdtPairs.sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume));
+        
+        // Return top 30
+        return usdtPairs.slice(0, 30).map(coin => ({
+            id: coin.symbol, // For Binance, id is the symbol like BTCUSDT
+            symbol: coin.symbol,
+            current_price: parseFloat(coin.lastPrice)
         }));
     } catch (error) {
-        console.error('Error fetching mid-cap coins:', error.message);
+        console.error('Error fetching top coins from Binance:', error.message);
         return [];
     }
 }
 
-// Fetch historical data (e.g., 15 minute or 1 hour candles)
-// For CoinGecko, /ohlc endpoint gives 30min candles if days=1
-async function fetchHistoricalData(coinId) {
+// Fetch exactly 100 recent 5-minute candles from Binance
+async function fetchHistoricalData(symbol) {
     try {
-        const config = {
+        const response = await axios.get(`https://api.binance.com/api/v3/klines`, {
             params: {
-                vs_currency: 'usd',
-                days: 1 // 1 day gives 30-minute candles on CoinGecko API (usually 48 data points).
+                symbol: symbol,
+                interval: '5m',
+                limit: 100
             }
-        };
-        if (process.env.COINGECKO_API_KEY) {
-            config.headers = { 'x-cg-demo-api-key': process.env.COINGECKO_API_KEY };
-        }
-        const response = await axios.get(`https://api.coingecko.com/api/v3/coins/${coinId}/ohlc`, config);
+        });
 
         const data = response.data;
         
         return data.map(d => ({
             timestamp: d[0],
-            open: d[1],
-            high: d[2],
-            low: d[3],
-            close: d[4],
-            volume: Math.random() * 1000000 + 500000 // Mocking volume
+            open: parseFloat(d[1]),
+            high: parseFloat(d[2]),
+            low: parseFloat(d[3]),
+            close: parseFloat(d[4]),
+            volume: parseFloat(d[5])
         }));
 
     } catch (error) {
-        console.error(`Error fetching historical data for ${coinId}:`, error.message);
+        console.error(`Error fetching historical data for ${symbol}:`, error.message);
         return null;
     }
 }
