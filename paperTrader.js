@@ -20,7 +20,7 @@ class PaperTrader {
         if (this.state.dailyDrawdownUSD === undefined) this.state.dailyDrawdownUSD = 0;
         if (!this.state.lastLossDate) this.state.lastLossDate = new Date().toDateString();
         
-        this.tradeLimitPerCoin = this.state.initialBalance * 0.1; // Max 10% per trade
+        this.tradeLimitPerCoin = this.state.initialBalance * 0.3; // Max 30% per trade
     }
 
     loadState() {

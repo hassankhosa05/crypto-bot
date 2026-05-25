@@ -67,8 +67,8 @@ async function updateDashboard() {
                 const currentPrice = prices[symbol] ?? position.entryPrice;
                 const movePct = (currentPrice - position.entryPrice) / position.entryPrice;
                 const unrealized = (currentPrice - position.entryPrice) * position.amount;
-                const stopLoss = position.stopLoss ?? position.entryPrice * (1 - (state.risk?.stopLossPct ?? 0.02));
-                const takeProfit = position.takeProfit ?? position.entryPrice * (1 + (state.risk?.takeProfitPct ?? 0.05));
+                const stopLoss = position.slPrice ?? position.entryPrice * (1 - (state.risk?.stopLossPct ?? 0.02));
+                const takeProfit = position.tpPrice ?? position.entryPrice * (1 + (state.risk?.takeProfitPct ?? 0.05));
 
                 const row = document.createElement('tr');
                 row.innerHTML = `

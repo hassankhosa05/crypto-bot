@@ -8,6 +8,8 @@ const { startDashboard } = require('./dashboard');
 
 const trader = new PaperTrader(300); // Start with $300 simulated balance
 const historicalDataStore = {}; // Memory store for 100 candles per coin
+const emergencyExitCache = {}; // Cache of { symbol: boolean } to avoid CPU-heavy recalculations
+let dashboardStarted = false;
 
 async function startBot() {
     console.log(chalk.blue(`\n--- Starting Bot Initialization: ${new Date().toISOString()} ---`));
@@ -22,9 +24,27 @@ async function startBot() {
     const currentPrices = {};
     const streamNames = [];
 
+    // Ensure we track and subscribe to all currently held positions, even if they fall out of top 30
+    const heldSymbols = Object.keys(trader.state.positions);
+    if (heldSymbols.length > 0) {
+        console.log(chalk.cyan(`Currently held positions: ${heldSymbols.join(', ')}`));
+    }
+
+    // Merge top volume coins and currently held positions
+    const allCoinsToTrack = [...coins];
+    for (const heldSymbol of heldSymbols) {
+        if (!allCoinsToTrack.some(c => c.symbol === heldSymbol)) {
+            allCoinsToTrack.push({
+                id: heldSymbol,
+                symbol: heldSymbol,
+                current_price: trader.state.positions[heldSymbol].entryPrice // fallback price
+            });
+        }
+    }
+
     // 2. Warm up indicators by fetching last 100 candles for each coin
-    console.log(chalk.yellow(`Warming up indicators for ${coins.length} coins...`));
-    for (const coin of coins) {
+    console.log(chalk.yellow(`Warming up indicators for ${allCoinsToTrack.length} coins...`));
+    for (const coin of allCoinsToTrack) {
         currentPrices[coin.symbol] = coin.current_price;
         
         await delay(500); // Respect REST API limits during initialization
@@ -32,6 +52,9 @@ async function startBot() {
         if (historicalData) {
             historicalDataStore[coin.symbol] = historicalData;
             streamNames.push(`${coin.symbol.toLowerCase()}@kline_5m`);
+            
+            // Calculate and cache initial emergency exit flag
+            emergencyExitCache[coin.symbol] = checkEmergencyExit(historicalData);
         }
     }
     
@@ -42,8 +65,11 @@ async function startBot() {
     console.log(chalk.cyan(`Available Balance: $${trader.state.balance.toFixed(2)}`));
     console.log(chalk.cyan(`Daily Losses: ${trader.state.dailyLosses}/3`));
     
-    // 3. Start Dashboard
-    startDashboard(3000);
+    // 3. Start Dashboard (Only once across reconnects)
+    if (!dashboardStarted) {
+        startDashboard(3000, trader);
+        dashboardStarted = true;
+    }
 
     // 4. Connect to Binance WebSockets
     const streamUrl = `wss://stream.binance.com:9443/stream?streams=${streamNames.join('/')}`;
@@ -64,13 +90,13 @@ async function startBot() {
         const currentPrice = parseFloat(kline.c);
         const isClosed = kline.x;
 
-        // Update live price for dashboard
+        // Update live price in memory for dashboard
         trader.state.currentPrices[symbol] = currentPrice;
 
         // Continuous Risk Management (Runs on EVERY tick)
         if (trader.state.positions[symbol]) {
-            const historicalData = historicalDataStore[symbol];
-            const emergencyExitFlag = historicalData ? checkEmergencyExit(historicalData) : false;
+            // Optimized: use the cached emergency exit flag computed on the last closed candle
+            const emergencyExitFlag = !!emergencyExitCache[symbol];
             await trader.checkRiskManagement(symbol, currentPrice, emergencyExitFlag);
         }
 
@@ -88,21 +114,28 @@ async function startBot() {
                 volume: parseFloat(kline.v)
             };
             
-            historicalDataStore[symbol].push(newCandle);
-            if (historicalDataStore[symbol].length > 100) {
-                historicalDataStore[symbol].shift(); // Keep array at 100 length
+            if (historicalDataStore[symbol]) {
+                historicalDataStore[symbol].push(newCandle);
+                if (historicalDataStore[symbol].length > 100) {
+                    historicalDataStore[symbol].shift(); // Keep array at 100 length
+                }
+                
+                // Recalculate and cache emergency exit flag only when candle closes
+                emergencyExitCache[symbol] = checkEmergencyExit(historicalDataStore[symbol]);
             }
 
             // 2. Execute Strategy if we don't have a position
             if (!trader.state.positions[symbol]) {
-                const coinObj = coins.find(c => c.symbol === symbol) || { symbol, current_price: currentPrice };
+                const coinObj = allCoinsToTrack.find(c => c.symbol === symbol) || { symbol, current_price: currentPrice };
                 // Update current price in coin object just in case
                 coinObj.current_price = currentPrice;
                 
-                const decision = evaluateTrade(coinObj, historicalDataStore[symbol]);
+                if (historicalDataStore[symbol]) {
+                    const decision = evaluateTrade(coinObj, historicalDataStore[symbol]);
 
-                if (decision.signal === 'BUY') {
-                    await trader.executeTrade(symbol, 'BUY', currentPrice, 'Confluence Engine', decision.reason, decision.atr);
+                    if (decision.signal === 'BUY') {
+                        await trader.executeTrade(symbol, 'BUY', currentPrice, 'Confluence Engine', decision.reason, decision.atr);
+                    }
                 }
             }
         }

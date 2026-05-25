@@ -49,6 +49,7 @@ function evaluateTrade(coin, historicalData) {
     
     const currentRsi = rsi[rsi.length - 1];
     const currentBb = bb[bb.length - 1];
+    const prevBb = bb[bb.length - 2];
     const currentAtr = atrResult[atrResult.length - 1];
 
     // --- 1. CORE FILTERS (MUST PASS) ---
@@ -73,7 +74,7 @@ function evaluateTrade(coin, historicalData) {
          return { signal: 'NO TRADE', score: 0, reason: 'Failed Heatmap Filter (Major sell wall overhead)', atr: currentAtr };
     }
 
-    const estimatedSpreadPct = coin.spreadPct || 0.001;
+    const estimatedSpreadPct = coin.spreadPct || 0.0001;
     const atrPct = currentAtr / currentPrice;
     if (estimatedSpreadPct > atrPct * 0.20) {
         return { signal: 'NO TRADE', score: 0, reason: 'Spread too large', atr: currentAtr };
@@ -116,9 +117,9 @@ function evaluateTrade(coin, historicalData) {
         scoreReasons.push('RSI Mid (+1)');
     }
 
-    // Bollinger lower-band true bounce AND RSI 35-45
+    // Bollinger lower-band true bounce AND RSI 35-48
     const prevClose = closes[closes.length - 2];
-    const touchedLowerBand = prevClose <= currentBb.lower && currentPrice > currentBb.lower;
+    const touchedLowerBand = prevBb && prevClose <= prevBb.lower && currentPrice > currentBb.lower;
     if (touchedLowerBand && currentRsi >= 35 && currentRsi <= 48) {
         score += 1;
         scoreReasons.push('Bollinger Bounce (+1)');
@@ -144,7 +145,7 @@ function evaluateTrade(coin, historicalData) {
  * Used to close an open position early if market turns hostile.
  */
 function checkEmergencyExit(historicalData) {
-    if (historicalData.length < 26) return false;
+    if (historicalData.length < 34) return false; // Needs at least 34 bars for stable MACD histogram
     
     const closes = historicalData.map(d => d.close);
     const ema9 = EMA.calculate({ period: 9, values: closes });
@@ -161,13 +162,16 @@ function checkEmergencyExit(historicalData) {
     const currentMacd = macdResult[macdResult.length - 1];
     const prevMacd = macdResult[macdResult.length - 2];
 
+    if (!currentMacd || !prevMacd) return false;
+
     // EMA9 crosses below EMA21
     const emaCrossDown = prevEma9 >= prevEma21 && currentEma9 < currentEma21;
     
-    // MACD histogram flips positive to negative
-    const macdFlipNegative = prevMacd.histogram >= 0 && currentMacd.histogram < 0;
+    // Relaxed Emergency Exit: Only exit if EMA9 crosses below EMA21 AND MACD is bearish (histogram < 0)
+    // This reduces false exits due to noise on minor pullbacks.
+    const macdIsBearish = currentMacd.histogram < 0;
 
-    return emaCrossDown || macdFlipNegative;
+    return emaCrossDown && macdIsBearish;
 }
 
 module.exports = {
