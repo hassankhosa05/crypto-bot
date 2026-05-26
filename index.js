@@ -2,7 +2,7 @@ require('dotenv').config();
 const WebSocket = require('ws');
 const chalk = require('chalk');
 const { fetchMidCapCoins, fetchHistoricalData, delay } = require('./dataFetcher');
-const { evaluateTrade, checkEmergencyExit } = require('./strategies');
+const { evaluateTradeV2: evaluateTrade, checkEmergencyExitV2: checkEmergencyExit } = require('./strategyV2');
 const PaperTrader = require('./paperTrader');
 const { startDashboard } = require('./dashboard');
 
@@ -14,12 +14,23 @@ let dashboardStarted = false;
 async function startBot() {
     console.log(chalk.blue(`\n--- Starting Bot Initialization: ${new Date().toISOString()} ---`));
     
-    // 1. Fetch Top Coins
-    const coins = await fetchMidCapCoins();
-    if (coins.length === 0) {
-        console.log(chalk.red('No coins fetched. Exiting.'));
+    // 1. Load Adaptive Universe
+    let activeUniverse = null;
+    try {
+        activeUniverse = JSON.parse(require('fs').readFileSync('./active_universe.json', 'utf8'));
+    } catch(e) {
+        console.log(chalk.yellow('No active_universe.json found. Running universe selector first...'));
+        const { runSelector } = require('./universeSelector');
+        await runSelector();
+        activeUniverse = JSON.parse(require('fs').readFileSync('./active_universe.json', 'utf8'));
+    }
+    
+    if (!activeUniverse || !activeUniverse.coins) {
+        console.log(chalk.red('Failed to load active universe. Exiting.'));
         return;
     }
+    
+    const coins = Object.keys(activeUniverse.coins).map(sym => ({ symbol: sym, id: sym }));
 
     const currentPrices = {};
     const streamNames = [];
@@ -51,7 +62,7 @@ async function startBot() {
         const historicalData = await fetchHistoricalData(coin.id);
         if (historicalData) {
             historicalDataStore[coin.symbol] = historicalData;
-            streamNames.push(`${coin.symbol.toLowerCase()}@kline_5m`);
+            streamNames.push(`${coin.symbol.toLowerCase()}@kline_15m`);
             
             // Calculate and cache initial emergency exit flag
             // emergencyExitCache[coin.symbol] = checkEmergencyExit(historicalData);
@@ -104,7 +115,7 @@ async function startBot() {
 
         // Strategy Execution (Runs ONLY exactly when a 5m candle closes)
         if (isClosed) {
-            console.log(chalk.dim(`[${symbol}] 5m Candle Closed at $${currentPrice}`));
+            console.log(chalk.dim(`[${symbol}] 15m Candle Closed at $${currentPrice}`));
             
             // 1. Append the newly closed candle to historical data
             const newCandle = {

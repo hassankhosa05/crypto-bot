@@ -1,6 +1,7 @@
 const fs = require('fs');
 
 const STATE_FILE = 'portfolio.json';
+const UNIVERSE_FILE = 'active_universe.json';
 
 class PaperTrader {
     constructor(initialBalance = 300, googleSheetsLogger = null) {
@@ -21,6 +22,14 @@ class PaperTrader {
         if (!this.state.lastLossDate) this.state.lastLossDate = new Date().toDateString();
     }
 
+
+    loadUniverse() {
+        if (fs.existsSync(UNIVERSE_FILE)) {
+            try { return JSON.parse(fs.readFileSync(UNIVERSE_FILE, 'utf8')); } 
+            catch (e) { return null; }
+        }
+        return null;
+    }
     loadState() {
         if (fs.existsSync(STATE_FILE)) {
             try { return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); } 
@@ -52,34 +61,55 @@ class PaperTrader {
                 return;
             }
 
-            const riskUSD = this.state.balance * 0.01;
-            const stopDistance = Math.max(atr, currentPrice * 0.005);
+            // Dynamic Risk Sizing based on Universe Tiers and Regime
+            const universe = this.loadUniverse();
+            let riskPct = 0.02; // Default 2%
+            let isChoppy = false;
+            
+            if (universe && universe.coins[coinSymbol]) {
+                const tier = universe.coins[coinSymbol].tier;
+                if (tier === 2) riskPct = 0.01; // 1.0% for Tier 2
+            }
+            if (universe && universe.regime === 'CHOPPY') {
+                isChoppy = true;
+                riskPct *= 0.5; // Halve risk again in choppy regimes
+            }
+
+            const riskUSD = this.state.balance * riskPct;
+            const stopDistance = Math.max(atr * 1.5, currentPrice * 0.005);
             let tradeAmountUSD = (riskUSD / stopDistance) * currentPrice;
             const tradeLimitPerCoin = this.state.balance * 0.2;
             tradeAmountUSD = Math.min(tradeAmountUSD, tradeLimitPerCoin, this.state.balance);
-            if(tradeAmountUSD < 5) return;
+            if(tradeAmountUSD < 5) {
+                console.log(`Trade size for ${coinSymbol} under $5 limit (Choppy Regime? ${isChoppy}). Skipping.`);
+                return;
+            }
+            
+            // Apply 0.1% spot fee on entry
+            const fee = tradeAmountUSD * 0.001;
+            this.state.balance -= (tradeAmountUSD + fee);
+            
             const coinAmount = tradeAmountUSD / currentPrice;
 
-            // Risk sizing based on ATR
-            const riskPerCoin = atr; // 1.0 ATR Stop Loss
-            const slPrice = currentPrice - riskPerCoin;
-            const tpPrice = currentPrice + (atr * 2.2); // 2.2 ATR Take Profit
-            const breakEvenTrigger = currentPrice + atr; // +1 ATR Trailing Break-Even
+            // Risk sizing based on V2.2 rules
+            const riskDist = atr * 1.5;
+            const slPrice = currentPrice - riskDist;
+            const tp1Price = currentPrice + (riskDist * 2); // 2R
 
-            this.state.balance -= tradeAmountUSD;
             this.state.positions[coinSymbol] = {
                 amount: coinAmount,
+                totalSize: coinAmount,
                 entryPrice: currentPrice,
                 slPrice: slPrice,
-                tpPrice: tpPrice,
-                breakEvenTrigger: breakEvenTrigger,
-                trailingDistance: atr * 0.5,
+                tp1Price: tp1Price,
+                tp1Hit: false,
+                riskDist: riskDist,
                 entryAtr: atr,
                 strategy: strategyName,
                 timestamp: Date.now()
             };
 
-            const logMsg = `Bought ${coinAmount.toFixed(4)} ${coinSymbol} at $${currentPrice.toFixed(4)}. SL: $${slPrice.toFixed(4)}, TP: $${tpPrice.toFixed(4)}`;
+            const logMsg = `Bought ${coinAmount.toFixed(4)} ${coinSymbol} at ${currentPrice.toFixed(4)}. SL: ${slPrice.toFixed(4)}, TP (2R): ${tp1Price.toFixed(4)}`;
             console.log(logMsg);
             this.state.tradeHistory.push({ action: 'BUY', coin: coinSymbol, price: currentPrice, amount: coinAmount, reason, timestamp: new Date().toISOString() });
             this.saveState();
@@ -87,18 +117,21 @@ class PaperTrader {
             if (this.logger) await this.logger.logTrade('BUY', coinSymbol, currentPrice, null, strategyName, 0, reason);
 
         } else if (action === 'SELL' && this.state.positions[coinSymbol]) {
+            // Used for full exits (Stop Loss or Emergency Exit)
             const position = this.state.positions[coinSymbol];
             const sellValueUSD = position.amount * currentPrice;
-            const profitLoss = sellValueUSD - (position.amount * position.entryPrice);
+            const fee = sellValueUSD * 0.001;
+            const netSellValue = sellValueUSD - fee;
+            
+            const profitLoss = netSellValue - (position.amount * position.entryPrice);
             const profitLossPct = profitLoss / (position.amount * position.entryPrice);
 
-            // Check if it's a loss for daily protection
             if (profitLoss < 0) {
                 this.state.dailyLosses += 1;
                 this.state.dailyDrawdownUSD += Math.abs(profitLoss);
             }
 
-            this.state.balance += sellValueUSD;
+            this.state.balance += netSellValue;
             delete this.state.positions[coinSymbol];
 
             const logMsg = `Sold ${position.amount.toFixed(4)} ${coinSymbol} at $${currentPrice.toFixed(4)}. P/L: $${profitLoss.toFixed(2)} (${(profitLossPct*100).toFixed(2)}%) - Reason: ${reason}`;
@@ -110,51 +143,61 @@ class PaperTrader {
         }
     }
 
+    async executePartialSell(coinSymbol, currentPrice, fraction, reason) {
+        const position = this.state.positions[coinSymbol];
+        if (!position) return;
+        
+        const sellAmount = position.totalSize * fraction;
+        const sellValueUSD = sellAmount * currentPrice;
+        const fee = sellValueUSD * 0.001;
+        const netSellValue = sellValueUSD - fee;
+        
+        const profitLoss = netSellValue - (sellAmount * position.entryPrice);
+        
+        this.state.balance += netSellValue;
+        position.amount -= sellAmount;
+        
+        const logMsg = `Partial Sell (${(fraction*100).toFixed(0)}%) ${sellAmount.toFixed(4)} ${coinSymbol} at $${currentPrice.toFixed(4)}. P/L: $${profitLoss.toFixed(2)} - Reason: ${reason}`;
+        console.log(logMsg);
+        this.state.tradeHistory.push({ action: 'PARTIAL_SELL', coin: coinSymbol, price: currentPrice, amount: sellAmount, pnl: profitLoss, reason, timestamp: new Date().toISOString() });
+        this.saveState();
+    }
+
     async checkRiskManagement(coinSymbol, currentPrice, emergencyExitFlag = false) {
         if (!this.state.positions[coinSymbol]) return false;
 
         const position = this.state.positions[coinSymbol];
         this.resetDailyLossesIfNewDay();
 
-        // 1. Emergency Exit
-        if (emergencyExitFlag) {
-            console.log(`Emergency Exit triggered for ${coinSymbol}`);
-            await this.executeTrade(coinSymbol, 'SELL', currentPrice, position.strategy, 'Emergency Exit (EMA cross down or MACD flip)');
-            return true;
+        // 1. Update Trailing Stop (2.0 ATR trail from highest price)
+        const newStop = currentPrice - (position.entryAtr * 2.0);
+        if(newStop > position.slPrice){
+            position.slPrice = newStop;
+            this.saveState();
         }
 
-        if(currentPrice > position.entryPrice + position.entryAtr){
-            const newStop = currentPrice - position.trailingDistance;
-            if(newStop > position.slPrice){
-                position.slPrice = newStop;
-                this.saveState();
+        // 2. Partial TP1 (50% at 2R)
+        if (!position.tp1Hit && currentPrice >= position.tp1Price) {
+            position.tp1Hit = true;
+            await this.executePartialSell(coinSymbol, currentPrice, 0.5, 'Take Profit (2R)');
+            // Move SL to Entry Break-Even
+            if (position.slPrice < position.entryPrice) {
+                position.slPrice = position.entryPrice;
             }
+            this.saveState();
         }
 
-        // 2. Take Profit (1.5R)
-        if (currentPrice >= position.tpPrice) {
-            console.log(`Take Profit triggered for ${coinSymbol}`);
-            await this.executeTrade(coinSymbol, 'SELL', currentPrice, position.strategy, 'Take Profit');
-            return true;
-        }
-
-        // 3. Stop Loss
+        // 4. Stop Loss / Trailing Stop
         if (currentPrice <= position.slPrice) {
-            console.log(`Stop Loss triggered for ${coinSymbol}`);
+            console.log(`Stop Loss / Trailing Stop triggered for ${coinSymbol}`);
             await this.executeTrade(coinSymbol, 'SELL', currentPrice, position.strategy, 'Stop Loss');
             return true;
         }
 
-        // 4. Trailing Break-Even Check (+1R)
-        if (currentPrice >= position.breakEvenTrigger && position.slPrice < position.entryPrice) {
-            console.log(`Break-Even triggered for ${coinSymbol}. Moving SL to Entry Price.`);
-            position.slPrice = position.entryPrice;
-            this.saveState();
-        }
-
-        const heldMinutes = (Date.now() - position.timestamp) / 60000;
-        if(heldMinutes >= 60){
-            await this.executeTrade(coinSymbol, 'SELL', currentPrice, position.strategy, 'Time Exit');
+        // 5. Emergency Exit (EMA+VWAP+ROC weakness)
+        if (emergencyExitFlag) {
+            console.log(`Emergency Exit triggered for ${coinSymbol}`);
+            await this.executeTrade(coinSymbol, 'SELL', currentPrice, position.strategy, 'Emergency Exit V2.2');
             return true;
         }
 

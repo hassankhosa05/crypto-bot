@@ -1,0 +1,16 @@
+{
+  "updatedAt": "2026-05-26T09:46:35.603Z",
+  "regime": "CHOPPY",
+  "coins": {
+    "NEARUSDT": {
+      "tier": 2,
+      "pf": 1.43,
+      "trades": 22
+    },
+    "WLDUSDT": {
+      "tier": 2,
+      "pf": 1.25,
+      "trades": 21
+    }
+  }
+}
