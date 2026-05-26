@@ -64,8 +64,8 @@ function evaluateTrade(coin, historicalData) {
     const vol20 = volumes.slice(-20);
     const avgVol20 = vol20.reduce((a, b) => a + b, 0) / 20;
     const currentVolume = volumes[volumes.length - 1];
-    if (currentVolume <= avgVol20 * 1.05) {
-        return { signal: 'NO TRADE', score: 0, reason: 'Volume below conviction threshold', atr: currentAtr };
+    if (currentVolume <= avgVol20 * 0.85) {
+        return { signal: 'NO TRADE', score: 0, reason: 'Failed Volume Filter (Volume < 85% of average)', atr: currentAtr };
     }
 
     // Liquidity Heatmap Filter (Placeholder)
@@ -97,13 +97,13 @@ function evaluateTrade(coin, historicalData) {
     const emaBullish = currentEma9 > currentEma21;
 
     if (recentCross && emaBullish) {
-        score += 2;
+        score += 3;
         if(crossNow){
-            score += 1;
+            score += 0.5;
         } else if(cross1BarAgo){
-            score += 0.6;
-        } else {
             score += 0.3;
+        } else {
+            score += 0.1;
         }
         scoreReasons.push('EMA Momentum');
     }
@@ -130,7 +130,7 @@ function evaluateTrade(coin, historicalData) {
     }
 
     // --- 3. DECISION ---
-    if (emaBullish && recentCross && macdBullish && score >= 5.5) {
+    if (emaBullish && recentCross && score >= 5) {
         return {
             signal: 'BUY',
             score,
