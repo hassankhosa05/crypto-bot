@@ -11,9 +11,15 @@ const fmtPct = n => {
 };
 const pnlClass = n => (n > 0 ? 'profit-positive' : n < 0 ? 'profit-negative' : '');
 const fmtTime = ts => {
-    if (!ts) return '-';
-    const d = typeof ts === 'number' ? new Date(ts) : new Date(ts);
-    return d.toLocaleTimeString();
+    if (!ts) return "-";
+    const d = typeof ts === "number" ? new Date(ts) : new Date(ts);
+    const pad = n => String(n).padStart(2, "0");
+    const month = pad(d.getMonth() + 1);
+    const day = pad(d.getDate());
+    const hours = pad(d.getHours());
+    const minutes = pad(d.getMinutes());
+    const seconds = pad(d.getSeconds());
+    return `${month}-${day} ${hours}:${minutes}:${seconds}`;
 };
 
 async function updateDashboard() {
