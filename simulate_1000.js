@@ -68,7 +68,7 @@ async function evaluateCoin(symbol) {
             const result = evaluateTradeV2(coin, slice);
             if (result.signal === 'BUY') {
                 const riskUSD = PORTFOLIO_BALANCE * RISK_PCT;
-                const riskDist = result.atr * 1.5;
+                const riskDist = result.atr * 2.0;
                 
                 let totalSizeCoins = riskUSD / riskDist;
                 const maxTradeUSD = PORTFOLIO_BALANCE * 0.5;
@@ -89,14 +89,14 @@ async function evaluateCoin(symbol) {
                     remainingSize: totalSizeCoins,
                     risk: riskDist,
                     slPrice: currentPrice - riskDist,
-                    tp1Price: currentPrice + (riskDist * 2), // 2R target
+                    tp1Price: currentPrice + (riskDist * 3), // 2R target
                     tp1Hit: false,
                     pnlTracker: -fee
                 };
             }
         } else {
             let tradeClosed = false;
-            position.slPrice = Math.max(position.slPrice, currentPrice - (position.atr * 2.0));
+            position.slPrice = Math.max(position.slPrice, currentPrice - (position.atr * 2.5));
 
             if (!position.tp1Hit && currentHigh >= position.tp1Price) {
                 position.tp1Hit = true;

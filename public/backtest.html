@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crypto Bot - Custom Backtest</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0f111a;
+            --panel-bg: rgba(255, 255, 255, 0.05);
+            --border-color: rgba(255, 255, 255, 0.1);
+            --accent-color: #00ff88;
+            --text-main: #ffffff;
+            --text-dim: #8b92a5;
+        }
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            margin: 0;
+            padding: 40px 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        h1 { font-weight: 800; font-size: 2.5rem; margin-bottom: 10px; }
+        p.subtitle { color: var(--text-dim); margin-bottom: 40px; }
+        
+        .container {
+            width: 100%;
+            max-width: 600px;
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 30px;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+            display: flex;
+            flex-direction: column;
+        }
+        .form-group label {
+            font-size: 0.9rem;
+            color: var(--text-dim);
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+        .form-group input {
+            background: rgba(0,0,0,0.3);
+            border: 1px solid var(--border-color);
+            color: var(--text-main);
+            padding: 12px 16px;
+            border-radius: 8px;
+            font-family: 'Inter', sans-serif;
+            font-size: 1rem;
+            outline: none;
+            transition: border 0.3s;
+        }
+        .form-group input:focus { border-color: var(--accent-color); }
+        
+        button {
+            width: 100%;
+            background: var(--accent-color);
+            color: #000;
+            border: none;
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 1.1rem;
+            font-weight: 800;
+            cursor: pointer;
+            transition: transform 0.2s, opacity 0.2s;
+            margin-top: 10px;
+        }
+        button:hover { transform: translateY(-2px); opacity: 0.9; }
+        button:disabled { background: var(--text-dim); cursor: not-allowed; transform: none; }
+        
+        #results {
+            margin-top: 30px;
+            display: none;
+        }
+        .stat-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        .stat-box {
+            background: rgba(0,0,0,0.3);
+            border: 1px solid var(--border-color);
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .stat-box.highlight { border-color: var(--accent-color); }
+        .stat-box h3 { margin: 0 0 5px 0; font-size: 0.9rem; color: var(--text-dim); }
+        .stat-box p { margin: 0; font-size: 1.5rem; font-weight: 800; }
+        .stat-box p.green { color: var(--accent-color); }
+        
+        .coin-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+        .coin-list li {
+            display: flex;
+            justify-content: space-between;
+            padding: 12px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .coin-list li:last-child { border-bottom: none; }
+        
+        #error { color: #ff4d4d; margin-top: 20px; text-align: center; display: none; }
+    </style>
+</head>
+<body>
+    <h1>Crypto Scalper UI</h1>
+    <p class="subtitle">Standalone Historical Strategy Evaluator (V2.3)</p>
+    
+    <div class="container">
+        <div class="form-group">
+            <label>Start Date</label>
+            <input type="date" id="startDate">
+        </div>
+        <div class="form-group">
+            <label>End Date (Max 30 days from Start)</label>
+            <input type="date" id="endDate">
+        </div>
+        <div class="form-group">
+            <label>Starting Investment Amount ($)</label>
+            <input type="number" id="investment" value="1000" min="100">
+        </div>
+        <button id="runBtn" onclick="runBacktest()">Run Simulation</button>
+        
+        <p id="error"></p>
+        
+        <div id="results">
+            <h2 style="font-size: 1.2rem; margin-bottom: 15px;">Projection Results</h2>
+            <div class="stat-grid">
+                <div class="stat-box">
+                    <h3>Starting Balance</h3>
+                    <p id="resStart">$0.00</p>
+                </div>
+                <div class="stat-box highlight">
+                    <h3>Ending Balance</h3>
+                    <p id="resEnd" class="green">$0.00</p>
+                </div>
+                <div class="stat-box">
+                    <h3>Net Profit</h3>
+                    <p id="resNet" class="green">+$0.00</p>
+                </div>
+                <div class="stat-box">
+                    <h3>ROI</h3>
+                    <p id="resRoi" class="green">+0.00%</p>
+                </div>
+            </div>
+            
+            <h3 style="font-size: 1rem; color: var(--text-dim); margin-bottom: 10px;">Qualifying Coins</h3>
+            <ul class="coin-list" id="coinList"></ul>
+        </div>
+    </div>
+
+    <script>
+        // Set default dates
+        const today = new Date();
+        const thirtyDaysAgo = new Date(today);
+        thirtyDaysAgo.setDate(today.getDate() - 29);
+        
+        document.getElementById('endDate').valueAsDate = today;
+        document.getElementById('startDate').valueAsDate = thirtyDaysAgo;
+
+        async function runBacktest() {
+            const btn = document.getElementById('runBtn');
+            const errEl = document.getElementById('error');
+            const resEl = document.getElementById('results');
+            
+            errEl.style.display = 'none';
+            resEl.style.display = 'none';
+            
+            const startDate = document.getElementById('startDate').value;
+            const endDate = document.getElementById('endDate').value;
+            const investment = document.getElementById('investment').value;
+            
+            if(!startDate || !endDate || !investment) {
+                errEl.innerText = "Please fill all fields.";
+                errEl.style.display = 'block';
+                return;
+            }
+            
+            btn.innerText = "Simulating Markets... (Takes ~30s)";
+            btn.disabled = true;
+            
+            try {
+                const response = await fetch('/api/backtest', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ startDate, endDate, investment: parseFloat(investment) })
+                });
+                
+                const data = await response.json();
+                if(data.error) throw new Error(data.error);
+                
+                document.getElementById('resStart').innerText = '$' + data.startingBalance.toFixed(2);
+                document.getElementById('resEnd').innerText = '$' + data.endingBalance.toFixed(2);
+                document.getElementById('resNet').innerText = '+$' + data.totalNetPnL.toFixed(2);
+                document.getElementById('resRoi').innerText = '+' + data.roi.toFixed(2) + '%';
+                
+                const list = document.getElementById('coinList');
+                list.innerHTML = '';
+                if(data.coins.length === 0) {
+                    list.innerHTML = '<li>No coins qualified (Choppy Market)</li>';
+                } else {
+                    data.coins.forEach(c => {
+                        list.innerHTML += `<li>
+                            <strong>${c.symbol}</strong> 
+                            <span style="color:var(--text-dim)">PF: ${c.pf.toFixed(2)} | Net: $${c.netPnL.toFixed(2)}</span>
+                        </li>`;
+                    });
+                }
+                
+                resEl.style.display = 'block';
+            } catch (e) {
+                errEl.innerText = "Error: " + e.message;
+                errEl.style.display = 'block';
+            }
+            
+            btn.innerText = "Run Simulation";
+            btn.disabled = false;
+        }
+    </script>
+</body>
+</html>

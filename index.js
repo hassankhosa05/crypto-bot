@@ -6,10 +6,43 @@ const { evaluateTradeV2: evaluateTrade, checkEmergencyExitV2: checkEmergencyExit
 const PaperTrader = require('./paperTrader');
 const { startDashboard } = require('./dashboard');
 
-const trader = new PaperTrader(300); // Start with $300 simulated balance
+let trader;
+if (process.env.TRADE_MODE === 'LIVE') {
+    const LiveTrader = require('./liveTrader');
+    trader = new LiveTrader();
+    console.log(chalk.red.bold("!!! WARNING: BOT IS RUNNING IN LIVE TRADING MODE WITH REAL MONEY !!!"));
+} else {
+    trader = new PaperTrader(300);
+    console.log(chalk.green("Bot is running in PAPER TRADING mode."));
+}
 const historicalDataStore = {}; // Memory store for 100 candles per coin
 const emergencyExitCache = {}; // Cache of { symbol: boolean } to avoid CPU-heavy recalculations
 let dashboardStarted = false;
+let activeWs = null; // Track active WebSocket connection globally for dynamic rotation
+let rotationTimer = null; // Track scheduled rotation timer
+
+function scheduleUniverseRotation() {
+    if (rotationTimer) return; // Prevent creating multiple rotation timers on WebSocket reconnects
+    
+    const rotationIntervalMs = 24 * 60 * 60 * 1000; // 24 hours
+    
+    rotationTimer = setInterval(async () => {
+        console.log(chalk.yellow('\n=== Running Scheduled Daily Universe Rotation ==='));
+        try {
+            const { runSelector } = require('./universeSelector');
+            await runSelector(); // Re-evaluate top coins using 7-day parameters and save new active_universe.json
+            
+            if (activeWs) {
+                console.log(chalk.cyan('Closing active WebSocket to trigger refresh with new universe...'));
+                activeWs.close(); // Triggers the ws 'close' event, which calls startBot() and connects to the new coins
+            }
+        } catch (e) {
+            console.error(chalk.red('Scheduled daily rotation failed:'), e.message);
+        }
+    }, rotationIntervalMs);
+    
+    console.log(chalk.green('Daily universe automatic rotation scheduler successfully registered.'));
+}
 
 async function startBot() {
     console.log(chalk.blue(`\n--- Starting Bot Initialization: ${new Date().toISOString()} ---`));
@@ -64,10 +97,13 @@ async function startBot() {
             historicalDataStore[coin.symbol] = historicalData;
             streamNames.push(`${coin.symbol.toLowerCase()}@kline_15m`);
             
-            // Calculate and cache initial emergency exit flag
-            // emergencyExitCache[coin.symbol] = checkEmergencyExit(historicalData);
+            // Calculate and cache initial emergency exit flag using correct entryAtr key
             const initPosition = trader.state.positions[coin.symbol];
-            emergencyExitCache[coin.symbol] = checkEmergencyExit(historicalData,initPosition?.entryPrice,initPosition?.atr);
+            emergencyExitCache[coin.symbol] = checkEmergencyExit(
+                historicalData,
+                initPosition?.entryPrice,
+                initPosition?.entryAtr
+            );
         }
     }
     
@@ -89,6 +125,7 @@ async function startBot() {
     console.log(chalk.green(`\nConnecting to Binance WebSocket for ${streamNames.length} streams...`));
     
     const ws = new WebSocket(streamUrl);
+    activeWs = ws; // Store reference globally for rotation close trigger
 
     ws.on('open', () => {
         console.log(chalk.green('WebSocket connected successfully! Listening for live price events...'));
@@ -109,8 +146,7 @@ async function startBot() {
         // Continuous Risk Management (Runs on EVERY tick)
         if (trader.state.positions[symbol]) {
             // Optimized: use the cached emergency exit flag computed on the last closed candle
-            const emergencyExitFlag = !!emergencyExitCache[symbol];
-            await trader.checkRiskManagement(symbol, currentPrice, emergencyExitFlag);
+            await trader.checkRiskManagement(symbol, currentPrice);
         }
 
         // Strategy Execution (Runs ONLY exactly when a 5m candle closes)
@@ -134,13 +170,17 @@ async function startBot() {
                 }
                 
                 // Recalculate and cache emergency exit flag only when candle closes
-                // emergencyExitCache[symbol] = checkEmergencyExit(historicalDataStore[symbol]);
                 const position = trader.state.positions[symbol];
                 emergencyExitCache[symbol] = checkEmergencyExit(
                     historicalDataStore[symbol],
                     position?.entryPrice,
-                    position?.atr
+                    position?.entryAtr
                 );
+
+                // Consolidate: Call updateTrailingStops exactly once on candle close with updated flag
+                if (trader.state.positions[symbol] && trader.updateTrailingStops) {
+                    await trader.updateTrailingStops(symbol, currentPrice, emergencyExitCache[symbol]);
+                }
             }
 
             // 2. Execute Strategy if we don't have a position
@@ -168,6 +208,9 @@ async function startBot() {
     ws.on('error', (err) => {
         console.error(chalk.red('WebSocket error:'), err);
     });
+
+    // 5. Register daily universe rotation scheduler
+    scheduleUniverseRotation();
 }
 
 // Start the bot

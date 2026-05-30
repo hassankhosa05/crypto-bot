@@ -217,3 +217,11 @@ tbody tr:hover {
         grid-column: 1 / -1;
     }
 }
+
+/* Fix for long reason texts overflowing the table */
+table td {
+    max-width: 300px;
+    white-space: normal;
+    word-wrap: break-word;
+    line-height: 1.4;
+}

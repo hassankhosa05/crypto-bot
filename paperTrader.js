@@ -1,4 +1,5 @@
 const fs = require('fs');
+const { getExchangeInfo } = require('./exchangeInfo');
 
 const STATE_FILE = 'portfolio.json';
 const UNIVERSE_FILE = 'active_universe.json';
@@ -21,7 +22,6 @@ class PaperTrader {
         if (this.state.dailyDrawdownUSD === undefined) this.state.dailyDrawdownUSD = 0;
         if (!this.state.lastLossDate) this.state.lastLossDate = new Date().toDateString();
     }
-
 
     loadUniverse() {
         if (fs.existsSync(UNIVERSE_FILE)) {
@@ -56,8 +56,8 @@ class PaperTrader {
         this.resetDailyLossesIfNewDay();
 
         if (action === 'BUY' && !this.state.positions[coinSymbol]) {
-            if (this.state.dailyLosses >= 3 || this.state.dailyDrawdownUSD >= this.state.initialBalance * 0.05) {
-                console.log(`Daily max losses (3) or drawdown (5%) reached. Skipping BUY for ${coinSymbol}.`);
+            if (this.state.dailyDrawdownUSD >= this.state.initialBalance * 0.05) {
+                console.log(`Daily max drawdown (5%) reached. Skipping BUY for ${coinSymbol}.`);
                 return;
             }
 
@@ -76,7 +76,7 @@ class PaperTrader {
             }
 
             const riskUSD = this.state.balance * riskPct;
-            const stopDistance = Math.max(atr * 1.5, currentPrice * 0.005);
+            const stopDistance = Math.max(atr * 2.0, currentPrice * 0.005);
             let tradeAmountUSD = (riskUSD / stopDistance) * currentPrice;
             const tradeLimitPerCoin = this.state.balance * 0.2;
             tradeAmountUSD = Math.min(tradeAmountUSD, tradeLimitPerCoin, this.state.balance);
@@ -92,9 +92,9 @@ class PaperTrader {
             const coinAmount = tradeAmountUSD / currentPrice;
 
             // Risk sizing based on V2.2 rules
-            const riskDist = atr * 1.5;
+            const riskDist = atr * 2.0;
             const slPrice = currentPrice - riskDist;
-            const tp1Price = currentPrice + (riskDist * 2); // 2R
+            const tp1Price = currentPrice + (riskDist * 3); // 2R
 
             this.state.positions[coinSymbol] = {
                 amount: coinAmount,
@@ -146,9 +146,23 @@ class PaperTrader {
     async executePartialSell(coinSymbol, currentPrice, fraction, reason) {
         const position = this.state.positions[coinSymbol];
         if (!position) return;
+
+        const exInfo = await getExchangeInfo();
+        const symbolRules = exInfo[coinSymbol];
         
         const sellAmount = position.totalSize * fraction;
         const sellValueUSD = sellAmount * currentPrice;
+        const remainingAmount = position.amount - sellAmount;
+        const remainingValueUSD = remainingAmount * currentPrice;
+
+        // Dust/MIN_NOTIONAL check: If either the partial sell amount or the remaining position is under minNotional (or default $5), execute a FULL SELL instead to prevent locked assets.
+        const minNotional = symbolRules ? symbolRules.minNotional : 5;
+        if (sellValueUSD < minNotional || remainingValueUSD < minNotional) {
+            console.log(require('chalk').yellow(`Paper partial sell or remaining size for ${coinSymbol} falls below MIN_NOTIONAL limit ($${minNotional}). Executing FULL sell instead.`));
+            await this.executeTrade(coinSymbol, 'SELL', currentPrice, position.strategy, `${reason} (Full Sell due to MIN_NOTIONAL limit)`);
+            return;
+        }
+
         const fee = sellValueUSD * 0.001;
         const netSellValue = sellValueUSD - fee;
         
@@ -163,44 +177,47 @@ class PaperTrader {
         this.saveState();
     }
 
-    async checkRiskManagement(coinSymbol, currentPrice, emergencyExitFlag = false) {
+    
+    async checkRiskManagement(coinSymbol, currentPrice) {
         if (!this.state.positions[coinSymbol]) return false;
 
         const position = this.state.positions[coinSymbol];
         this.resetDailyLossesIfNewDay();
 
-        // 1. Update Trailing Stop (2.0 ATR trail from highest price)
-        const newStop = currentPrice - (position.entryAtr * 2.0);
-        if(newStop > position.slPrice){
-            position.slPrice = newStop;
-            this.saveState();
-        }
-
-        // 2. Partial TP1 (50% at 2R)
         if (!position.tp1Hit && currentPrice >= position.tp1Price) {
             position.tp1Hit = true;
-            await this.executePartialSell(coinSymbol, currentPrice, 0.5, 'Take Profit (2R)');
-            // Move SL to Entry Break-Even
+            await this.executePartialSell(coinSymbol, currentPrice, 0.5, 'Take Profit (3R)');
             if (position.slPrice < position.entryPrice) {
                 position.slPrice = position.entryPrice;
             }
             this.saveState();
         }
 
-        // 4. Stop Loss / Trailing Stop
         if (currentPrice <= position.slPrice) {
-            console.log(`Stop Loss / Trailing Stop triggered for ${coinSymbol}`);
             await this.executeTrade(coinSymbol, 'SELL', currentPrice, position.strategy, 'Stop Loss');
             return true;
         }
 
-        // 5. Emergency Exit (EMA+VWAP+ROC weakness)
-        if (emergencyExitFlag) {
-            console.log(`Emergency Exit triggered for ${coinSymbol}`);
-            await this.executeTrade(coinSymbol, 'SELL', currentPrice, position.strategy, 'Emergency Exit V2.2');
-            return true;
+        return false;
+    }
+
+    async updateTrailingStops(coinSymbol, currentPrice, emergencyExitFlag = false) {
+        if (!this.state.positions[coinSymbol]) return false;
+
+        const position = this.state.positions[coinSymbol];
+        
+        // Trailing Stop logic: trail by 2.5 ATR (up from 2.0)
+        const newStop = currentPrice - (position.entryAtr * 2.5);
+        if(newStop > position.slPrice){
+            position.slPrice = newStop;
+            this.saveState();
+            console.log(require('chalk').blue(`Trailing Stop moved up for ${coinSymbol} to ${newStop.toFixed(4)}`));
         }
 
+        if (emergencyExitFlag) {
+            await this.executeTrade(coinSymbol, 'SELL', currentPrice, position.strategy, 'Emergency Exit V2.3');
+            return true;
+        }
         return false;
     }
 

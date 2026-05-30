@@ -31,13 +31,13 @@ async function fetchMidCapCoins() {
     }
 }
 
-// Fetch exactly 100 recent 5-minute candles from Binance
+// Fetch exactly 100 recent 15-minute candles from Binance
 async function fetchHistoricalData(symbol) {
     try {
         const response = await axios.get(`https://api.binance.com/api/v3/klines`, {
             params: {
                 symbol: symbol,
-                interval: '5m',
+                interval: '15m',
                 limit: 100
             }
         });

@@ -5,7 +5,7 @@ const { evaluateTradeV2, checkEmergencyExitV2 } = require('./strategyV2');
 const { EMA } = require('technicalindicators');
 
 const TIMEFRAME = '15m';
-const KLINES_TO_FETCH = 1500; // ~14 days
+const KLINES_TO_FETCH = 1000; // ~10 days of 15-minute candles (3 days warmup + 7 days active trading)
 
 const STABLECOINS = ['USDT', 'USDC', 'FDUSD', 'TUSD', 'USD1', 'RLUSD', 'DAI', 'USDP'];
 
@@ -174,7 +174,8 @@ async function runSelector() {
     }
     console.log("\nEvaluation complete.");
 
-    let validCoins = results.filter(c => c.pf > 1.2 && c.tradesCount >= 20);
+    // Filter by PF > 1.2 and at least 8 trades over 7.3 days of active backtesting (~1.1 trades/day density)
+    let validCoins = results.filter(c => c.pf > 1.2 && c.tradesCount >= 8);
     validCoins.sort((a, b) => b.pf - a.pf);
     const top15 = validCoins.slice(0, 15);
     
