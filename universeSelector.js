@@ -179,6 +179,11 @@ async function runSelector() {
     validCoins.sort((a, b) => b.pf - a.pf);
     const top15 = validCoins.slice(0, 15);
     
+    if (top15.length === 0) {
+        console.error(require("chalk").red("\n[ERROR] Universe selection returned 0 valid coins (possibly due to API rate limits or IP ban). Aborting active_universe.json update to prevent clearing active streams."));
+        return;
+    }
+    
     const universe = {
         updatedAt: new Date().toISOString(),
         regime: regime,

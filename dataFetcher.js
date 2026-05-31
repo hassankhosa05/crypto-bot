@@ -32,30 +32,36 @@ async function fetchMidCapCoins() {
 }
 
 // Fetch exactly 100 recent 15-minute candles from Binance
-async function fetchHistoricalData(symbol) {
-    try {
-        const response = await axios.get(`https://api.binance.com/api/v3/klines`, {
-            params: {
-                symbol: symbol,
-                interval: '15m',
-                limit: 100
+async function fetchHistoricalData(symbol, retries = 3, delayMs = 1000) {
+    for (let i = 0; i < retries; i++) {
+        try {
+            const response = await axios.get(`https://api.binance.com/api/v3/klines`, {
+                params: {
+                    symbol: symbol,
+                    interval: '15m',
+                    limit: 100
+                }
+            });
+
+            const data = response.data;
+            
+            return data.map(d => ({
+                timestamp: d[0],
+                open: parseFloat(d[1]),
+                high: parseFloat(d[2]),
+                low: parseFloat(d[3]),
+                close: parseFloat(d[4]),
+                volume: parseFloat(d[5])
+            }));
+
+        } catch (error) {
+            console.error(`Attempt ${i + 1} failed fetching historical data for ${symbol}:`, error.message);
+            if (i < retries - 1) {
+                await delay(delayMs * Math.pow(2, i)); // Exponential backoff
+            } else {
+                return null;
             }
-        });
-
-        const data = response.data;
-        
-        return data.map(d => ({
-            timestamp: d[0],
-            open: parseFloat(d[1]),
-            high: parseFloat(d[2]),
-            low: parseFloat(d[3]),
-            close: parseFloat(d[4]),
-            volume: parseFloat(d[5])
-        }));
-
-    } catch (error) {
-        console.error(`Error fetching historical data for ${symbol}:`, error.message);
-        return null;
+        }
     }
 }
 
