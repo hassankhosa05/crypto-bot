@@ -91,7 +91,7 @@ async function startBot() {
     for (const coin of allCoinsToTrack) {
         currentPrices[coin.symbol] = coin.current_price;
         
-        await delay(500); // Respect REST API limits during initialization
+        await delay(2000); // Respect REST API limits during initialization
         const historicalData = await fetchHistoricalData(coin.id);
         if (historicalData) {
             historicalDataStore[coin.symbol] = historicalData;

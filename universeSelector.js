@@ -171,6 +171,7 @@ async function runSelector() {
         process.stdout.write(sym + " ");
         const res = await evaluateCoin(sym);
         if (res) results.push(res);
+        await new Promise(r => setTimeout(r, 5000)); // Delay 5 seconds between coins
     }
     console.log("\nEvaluation complete.");
 

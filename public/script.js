@@ -19,7 +19,8 @@ const fmtTime = ts => {
     const hours = pad(d.getHours());
     const minutes = pad(d.getMinutes());
     const seconds = pad(d.getSeconds());
-    return `${month}-${day} ${hours}:${minutes}:${seconds}`;
+    const year = d.getFullYear();
+    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 };
 
 async function updateDashboard() {
@@ -58,7 +59,7 @@ async function updateDashboard() {
         const lastUpdateEl = document.getElementById('lastUpdate');
         if (lastUpdateEl) {
             lastUpdateEl.textContent = state.lastUpdate
-                ? `Updated ${new Date(state.lastUpdate).toLocaleTimeString()}`
+                ? `Updated ${new Date(state.lastUpdate).toLocaleString()}`
                 : 'No price data yet';
         }
 
