@@ -45,20 +45,45 @@ function scheduleUniverseRotation() {
     console.log(chalk.green('Daily universe automatic rotation scheduler successfully registered.'));
 }
 
+const FALLBACK_UNIVERSE = {
+    updatedAt: new Date().toISOString(),
+    regime: 'CHOPPY',
+    coins: {
+        'BTCUSDT':  { tier: 1, pf: 1.5, trades: 10, trainPf: 1.5, forwardPf: 1.5, forwardNetPnL: 50, forwardTrades: 10, tradesPerMonth: 10, avgDaysBetweenTrades: 3.0, winRate: 55 },
+        'ETHUSDT':  { tier: 1, pf: 1.5, trades: 10, trainPf: 1.5, forwardPf: 1.5, forwardNetPnL: 50, forwardTrades: 10, tradesPerMonth: 10, avgDaysBetweenTrades: 3.0, winRate: 55 },
+        'SOLUSDT':  { tier: 2, pf: 1.2, trades:  8, trainPf: 1.2, forwardPf: 1.2, forwardNetPnL: 30, forwardTrades:  8, tradesPerMonth:  8, avgDaysBetweenTrades: 3.5, winRate: 50 },
+        'BNBUSDT':  { tier: 2, pf: 1.2, trades:  8, trainPf: 1.2, forwardPf: 1.2, forwardNetPnL: 30, forwardTrades:  8, tradesPerMonth:  8, avgDaysBetweenTrades: 3.5, winRate: 50 },
+        'XRPUSDT':  { tier: 2, pf: 1.2, trades:  8, trainPf: 1.2, forwardPf: 1.2, forwardNetPnL: 30, forwardTrades:  8, tradesPerMonth:  8, avgDaysBetweenTrades: 3.5, winRate: 50 },
+        'ADAUSDT':  { tier: 2, pf: 1.2, trades:  8, trainPf: 1.2, forwardPf: 1.2, forwardNetPnL: 30, forwardTrades:  8, tradesPerMonth:  8, avgDaysBetweenTrades: 3.5, winRate: 50 },
+        'DOGEUSDT': { tier: 2, pf: 1.2, trades:  8, trainPf: 1.2, forwardPf: 1.2, forwardNetPnL: 30, forwardTrades:  8, tradesPerMonth:  8, avgDaysBetweenTrades: 3.5, winRate: 50 },
+    }
+};
+
 async function startBot() {
     console.log(chalk.blue(`\n--- Starting Bot Initialization: ${new Date().toISOString()} ---`));
-    
+
+    // Start dashboard immediately so Render sees an open port before universe selection runs
+    if (!dashboardStarted) {
+        startDashboard(undefined, trader);
+        dashboardStarted = true;
+    }
+
     // 1. Load Adaptive Universe
     let activeUniverse = null;
     try {
         activeUniverse = JSON.parse(require('fs').readFileSync('./active_universe.json', 'utf8'));
     } catch(e) {
         console.log(chalk.yellow('No active_universe.json found. Running universe selector first...'));
-        const { runSelector } = require('./universeSelector');
-        await runSelector();
-        activeUniverse = JSON.parse(require('fs').readFileSync('./active_universe.json', 'utf8'));
+        try {
+            const { runSelector } = require('./universeSelector');
+            await runSelector();
+            activeUniverse = JSON.parse(require('fs').readFileSync('./active_universe.json', 'utf8'));
+        } catch(selectorErr) {
+            console.log(chalk.yellow('Universe selector failed or returned 0 coins. Using fallback universe for this cycle.'));
+            activeUniverse = { ...FALLBACK_UNIVERSE, updatedAt: new Date().toISOString() };
+        }
     }
-    
+
     if (!activeUniverse || !activeUniverse.coins) {
         console.log(chalk.red('Failed to load active universe. Exiting.'));
         return;
@@ -115,13 +140,7 @@ async function startBot() {
     console.log(chalk.cyan(`Available Balance: $${trader.state.balance.toFixed(2)}`));
     console.log(chalk.cyan(`Daily Losses: ${trader.state.dailyLosses}/3`));
     
-    // 3. Start Dashboard (Only once across reconnects)
-    if (!dashboardStarted) {
-        startDashboard(undefined, trader);
-        dashboardStarted = true;
-    }
-
-    // 4. Connect to Binance WebSockets
+    // 3. Connect to Binance WebSockets
     const streamUrl = `wss://stream.binance.com:9443/stream?streams=${streamNames.join('/')}`;
     console.log(chalk.green(`\nConnecting to Binance WebSocket for ${streamNames.length} streams...`));
     

@@ -127,8 +127,7 @@ async function runSelector() {
     const top15 = validCoins.slice(0, 15);
     
     if (top15.length === 0) {
-        console.error(require("chalk").red("\n[ERROR] Universe selection returned 0 valid coins (possibly due to API rate limits or IP ban). Aborting active_universe.json update to prevent clearing active streams."));
-        return;
+        throw new Error('Universe selection returned 0 valid coins (possibly due to API rate limits or IP ban). active_universe.json not updated.');
     }
     
     const universe = {
