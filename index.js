@@ -22,27 +22,35 @@ let dashboardStarted = false;
 let activeWs = null; // Track active WebSocket connection globally for dynamic rotation
 let rotationTimer = null; // Track scheduled rotation timer
 
-function scheduleUniverseRotation() {
+function scheduleUniverseRotation(delayMs = 3 * 24 * 60 * 60 * 1000) { // Default to 3 days
     if (rotationTimer) return; // Prevent creating multiple rotation timers on WebSocket reconnects
     
-    const rotationIntervalMs = 24 * 60 * 60 * 1000; // 24 hours
+    console.log(chalk.green("Next universe rotation scheduled in " + (delayMs / (60 * 60 * 1000)).toFixed(1) + " hours."));
     
-    rotationTimer = setInterval(async () => {
-        console.log(chalk.yellow('\n=== Running Scheduled Daily Universe Rotation ==='));
+    rotationTimer = setTimeout(async () => {
+        rotationTimer = null; // Reset so next run can be scheduled
+        console.log(chalk.yellow('\n=== Running Scheduled Universe Rotation ==='));
+        let success = false;
         try {
             const { runSelector } = require('./universeSelector');
-            await runSelector(); // Re-evaluate top coins using 7-day parameters and save new active_universe.json
-            
+            await runSelector(); // Re-evaluate top coins. Throws if 0 valid coins.
+            success = true;
+        } catch (e) {
+            console.error(chalk.red('Scheduled universe rotation failed:'), e.message);
+        }
+        
+        if (success) {
+            console.log(chalk.green('Universe rotation successful. Scheduling next rotation in 3 days.'));
             if (activeWs) {
                 console.log(chalk.cyan('Closing active WebSocket to trigger refresh with new universe...'));
                 activeWs.close(); // Triggers the ws 'close' event, which calls startBot() and connects to the new coins
             }
-        } catch (e) {
-            console.error(chalk.red('Scheduled daily rotation failed:'), e.message);
+            scheduleUniverseRotation(3 * 24 * 60 * 60 * 1000); // 3 days
+        } else {
+            console.log(chalk.yellow('Universe rotation failed. Retaining current universe and retrying in 24 hours.'));
+            scheduleUniverseRotation(24 * 60 * 60 * 1000); // 24 hours (1 day)
         }
-    }, rotationIntervalMs);
-    
-    console.log(chalk.green('Daily universe automatic rotation scheduler successfully registered.'));
+    }, delayMs);
 }
 
 const FALLBACK_UNIVERSE = {

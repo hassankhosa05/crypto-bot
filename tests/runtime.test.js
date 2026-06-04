@@ -11,6 +11,7 @@ require.cache[binancePath] = {
     filename: binancePath,
     loaded: true,
     exports: {
+        getAccountInfo: async () => ({ balances: [{ asset: "USDT", free: "123.45", locked: "0" }] }),
         getUSDTBalance: async () => 123.45,
         placeMarketOrder: async () => ({ executedQty: '1' }),
         placeLimitOrder: async () => ({ orderId: 1 }),

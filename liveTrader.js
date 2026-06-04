@@ -1,6 +1,6 @@
 const fs = require('fs');
 const chalk = require('chalk');
-const { getUSDTBalance, placeMarketOrder, placeLimitOrder, placeOcoSellOrder, cancelOrder, cancelOrderList, getOrderStatus } = require('./binanceApi');
+const { getAccountInfo, getUSDTBalance, placeMarketOrder, placeLimitOrder, placeOcoSellOrder, cancelOrder, cancelOrderList, getOrderStatus } = require('./binanceApi');
 const { getExchangeInfo, roundStep, roundTick } = require('./exchangeInfo');
 const { TRADING_CONFIG, getRiskDistance, getTakeProfitDistance, getTradeAmountUSD } = require('./tradingConfig');
 
@@ -22,6 +22,8 @@ class LiveTrader {
         if (this.state.initialBalance === undefined) this.state.initialBalance = 0;
         this.balance = this.state.balance;
         this.syncBalance(); 
+        this.reconcilePositions();
+        setInterval(() => this.reconcilePositions(), 30000);
     }
 
     loadUniverse() {
@@ -62,6 +64,62 @@ class LiveTrader {
             this.saveState();
         } catch(e) {
             console.error(chalk.red("Failed to fetch balance from Binance:", e.message));
+        }
+    }
+
+    async reconcilePositions() {
+        try {
+            const account = await getAccountInfo();
+            const balances = {};
+            account.balances.forEach(b => {
+                const total = parseFloat(b.free) + parseFloat(b.locked);
+                if (total > 0) {
+                    balances[b.asset] = total;
+                }
+            });
+
+            const exInfo = await getExchangeInfo();
+
+            for (const [coinSymbol, position] of Object.entries(this.state.positions)) {
+                const baseAsset = coinSymbol.replace("USDT", "");
+                const exchangeQty = balances[baseAsset] || 0;
+                
+                const symbolRules = exInfo[coinSymbol];
+                const minQty = symbolRules ? parseFloat(symbolRules.stepSize) : 0.0001;
+
+                if (exchangeQty < minQty) {
+                    console.log(chalk.yellow("[RECONCILE] Position for " + coinSymbol + " not found on exchange (Exchange qty: " + exchangeQty + ", min: " + minQty + "). Removing from state."));
+                    
+                    if (position.protectionOrderListId) {
+                        try {
+                            await cancelOrderList(coinSymbol, position.protectionOrderListId);
+                        } catch (err) {}
+                    }
+
+                    const lastPrice = (this.state.currentPrices && this.state.currentPrices[coinSymbol]) || position.entryPrice;
+                    const profitLoss = (position.amount * lastPrice) - (position.amount * position.entryPrice);
+
+                    this.state.tradeHistory.push({ 
+                        action: "SELL", 
+                        coin: coinSymbol, 
+                        amount: position.amount, 
+                        reason: "Exchange Reconciliation (OCO or Manual Exit)", 
+                        timestamp: new Date().toISOString() 
+                    });
+                    
+                    delete this.state.positions[coinSymbol];
+                    this.saveState();
+                } else {
+                    const diffPct = Math.abs(position.amount - exchangeQty) / position.amount;
+                    if (diffPct > 0.01 && diffPct < 0.90) {
+                        console.log(chalk.blue("[RECONCILE] Aligning amount for " + coinSymbol + ": " + position.amount + " -> " + exchangeQty));
+                        position.amount = exchangeQty;
+                        this.saveState();
+                    }
+                }
+            }
+        } catch (e) {
+            console.error(chalk.red("[RECONCILE] Failed to reconcile positions:", e.message));
         }
     }
 
@@ -233,8 +291,10 @@ class LiveTrader {
             }
 
             try {
-                const result = await this.executeHybridOrder(coinSymbol, 'SELL', sellAmount, currentPrice, symbolRules);
-                const actualSold = result.executedQty;
+                const roundedQty = roundStep(sellAmount, symbolRules.stepSize);
+                console.log(chalk.yellow("Executing direct MARKET SELL for " + roundedQty + " " + coinSymbol + "..."));
+                const result = await placeMarketOrder(coinSymbol, "SELL", roundedQty);
+                const actualSold = parseFloat(result.executedQty);
                 
                 const sellValueUSD = actualSold * currentPrice;
                 const fee = sellValueUSD * TRADING_CONFIG.feeRate;
@@ -286,8 +346,10 @@ class LiveTrader {
         }
 
         try {
-            const result = await this.executeHybridOrder(coinSymbol, 'SELL', sellAmount, currentPrice, symbolRules);
-            const actualSold = result.executedQty;
+            const roundedQty = roundStep(sellAmount, symbolRules.stepSize);
+            console.log(chalk.yellow("Executing direct MARKET PARTIAL SELL for " + roundedQty + " " + coinSymbol + "..."));
+            const result = await placeMarketOrder(coinSymbol, "SELL", roundedQty);
+            const actualSold = parseFloat(result.executedQty);
             
             position.amount -= actualSold;
             console.log(chalk.green(`LIVE PARTIAL SOLD ${actualSold} ${coinSymbol}. Reason: ${reason}`));
@@ -315,6 +377,21 @@ class LiveTrader {
         }
 
         this.resetDailyLossesIfNewDay();
+
+        // Stop-Limit Skip Protection: If the current price is significantly below our Stop Loss,
+        // it means the exchange STOP_LOSS_LIMIT order was likely skipped during a high-volatility flash crash.
+        // Force-cancel OCO and exit immediately via MARKET order.
+        const triggerBuffer = position.entryAtr ? (position.entryAtr * 0.5) : (position.entryPrice * 0.01);
+        if (currentPrice <= (position.slPrice - triggerBuffer)) {
+            console.log(chalk.red("[ALERT] Price (" + currentPrice + ") is significantly below SL (" + position.slPrice + "). OCO stop-limit may have been skipped. Force-exiting at MARKET."));
+            if (position.protectionOrderListId) {
+                try {
+                    await this.cancelProtectionOco(coinSymbol);
+                } catch(e) {}
+            }
+            await this.executeTrade(coinSymbol, "SELL", currentPrice, position.strategy, "Stop Loss Skipped (Emergency Market Exit)");
+            return true;
+        }
 
         if (!position.tp1Hit && currentPrice >= position.tp1Price) {
             if (position.protectionOrderListId) return false;
