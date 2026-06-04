@@ -1,4 +1,5 @@
 const axios = require('axios');
+const { TRADING_CONFIG } = require('./tradingConfig');
 
 async function delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
@@ -31,14 +32,14 @@ async function fetchMidCapCoins() {
     }
 }
 
-// Fetch exactly 100 recent 15-minute candles from Binance
+// Fetch exactly 100 recent candles from Binance using the shared bot timeframe
 async function fetchHistoricalData(symbol, retries = 3, delayMs = 1000) {
     for (let i = 0; i < retries; i++) {
         try {
             const response = await axios.get(`https://api.binance.com/api/v3/klines`, {
                 params: {
                     symbol: symbol,
-                    interval: '15m',
+                    interval: TRADING_CONFIG.timeframe,
                     limit: 100
                 }
             });

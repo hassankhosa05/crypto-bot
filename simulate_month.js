@@ -1,9 +1,17 @@
 const axios = require('axios');
 const fs = require('fs');
 const { evaluateTradeV2, checkEmergencyExitV2 } = require('./strategyV2');
+const { simulateWalkForward } = require('./backtestEngine');
 
 const TIMEFRAME = '15m';
 const KLINES_TO_FETCH = 2880; // ~30 days
+const WARMUP_CANDLES = 300;
+const TRAIN_SPLIT = 0.7;
+const MIN_TRAIN_PF = 1.25;
+const MIN_FORWARD_PF = 1.05;
+const MIN_FORWARD_TRADES = 5;
+const MIN_TRADES_PER_MONTH = 8;
+const MAX_AVG_DAYS_BETWEEN_TRADES = 4;
 
 const STABLECOINS = ['USDT', 'USDC', 'FDUSD', 'TUSD', 'USD1', 'RLUSD', 'DAI', 'USDP'];
 
@@ -45,18 +53,26 @@ async function fetchHistoricalData(symbol) {
     }));
 }
 
-async function evaluateCoin(symbol) {
-    let data = await fetchHistoricalData(symbol);
-    if(data.length < 500) return null;
-    
+function calculateProfitFactor(grossWin, grossLoss) {
+    if (grossLoss > 0) return grossWin / grossLoss;
+    return grossWin > 0 ? 999 : 0;
+}
+
+function calculateTestedDays(data, startIndex, endIndex) {
+    if (endIndex <= startIndex || !data[startIndex] || !data[endIndex - 1]) return 0;
+    return Math.max(1, (data[endIndex - 1].timestamp - data[startIndex].timestamp) / (24 * 60 * 60 * 1000));
+}
+
+function simulateWindow(symbol, data, startIndex, endIndex) {
     let position = null;
     let grossWin = 0;
     let grossLoss = 0;
     let tradesCount = 0;
+    let wins = 0;
     
     const TRADE_USD = 100; 
 
-    for (let i = 300; i < data.length; i++) {
+    for (let i = startIndex; i < endIndex; i++) {
         const slice = data.slice(Math.max(0, i - 400), i + 1);
         const currentCandle = slice[slice.length - 1];
         const currentPrice = currentCandle.close;
@@ -76,7 +92,7 @@ async function evaluateCoin(symbol) {
                     remainingSize: TRADE_USD / currentPrice,
                     risk: riskDist,
                     slPrice: currentPrice - riskDist,
-                    tp1Price: currentPrice + (riskDist * 3), // 2R target
+                    tp1Price: currentPrice + (riskDist * 3),
                     tp1Hit: false,
                     pnlTracker: -fee
                 };
@@ -111,16 +127,72 @@ async function evaluateCoin(symbol) {
 
             if (tradeClosed || position.remainingSize <= 0.0001) {
                 tradesCount++;
-                if (position.pnlTracker > 0) grossWin += position.pnlTracker;
-                else grossLoss += Math.abs(position.pnlTracker);
+                if (position.pnlTracker > 0) {
+                    wins++;
+                    grossWin += position.pnlTracker;
+                } else {
+                    grossLoss += Math.abs(position.pnlTracker);
+                }
                 position = null;
             }
         }
     }
-    
-    const pf = grossLoss > 0 ? grossWin / grossLoss : (grossWin > 0 ? 999 : 0);
+
+    if (position && position.remainingSize > 0) {
+        const currentPrice = data[endIndex - 1].close;
+        const sellVal = position.remainingSize * currentPrice;
+        position.pnlTracker += (sellVal - (sellVal * 0.001)) - (position.remainingSize * position.entryPrice);
+        tradesCount++;
+        if (position.pnlTracker > 0) {
+            wins++;
+            grossWin += position.pnlTracker;
+        } else {
+            grossLoss += Math.abs(position.pnlTracker);
+        }
+    }
+
+    const testedDays = calculateTestedDays(data, startIndex, endIndex);
+    const pf = calculateProfitFactor(grossWin, grossLoss);
     const netPnL = grossWin - grossLoss;
-    return { symbol, tradesCount, pf, netPnL, grossWin, grossLoss };
+    const tradesPerMonth = testedDays > 0 ? (tradesCount / testedDays) * 30 : 0;
+    const avgDaysBetweenTrades = tradesCount > 0 ? testedDays / tradesCount : 999;
+
+    const losses = tradesCount - wins;
+    return {
+        tradesCount,
+        wins,
+        winRate: tradesCount > 0 ? wins / tradesCount : 0,
+        avgWin: wins > 0 ? grossWin / wins : 0,
+        avgLoss: losses > 0 ? grossLoss / losses : 0,
+        pf,
+        netPnL,
+        grossWin,
+        grossLoss,
+        testedDays,
+        tradesPerMonth,
+        avgDaysBetweenTrades
+    };
+}
+
+async function evaluateCoin(symbol) {
+    const data = await fetchHistoricalData(symbol);
+    if(data.length < 500) return null;
+
+    const result = simulateWalkForward(data, {
+        symbol,
+        warmupCandles: WARMUP_CANDLES,
+        trainSplit: TRAIN_SPLIT,
+        initialBalance: 1000,
+        fixedTradeUSD: 100
+    });
+    if (!result) return null;
+
+    return {
+        symbol,
+        train: result.train,
+        forward: result.forward,
+        score: result.forward.netPnL + (Math.min(result.forward.pf, 5) * 2) + (result.forward.tradesPerMonth * 0.15)
+    };
 }
 
 async function runMonthlySimulation() {
@@ -134,8 +206,15 @@ async function runMonthlySimulation() {
     }
     console.log("\\nSimulation complete.");
 
-    let validCoins = results.filter(c => c.pf > 1.2 && c.tradesCount >= 10);
-    validCoins.sort((a, b) => b.pf - a.pf);
+    let validCoins = results.filter(c => {
+        return c.train.pf >= MIN_TRAIN_PF &&
+            c.forward.pf >= MIN_FORWARD_PF &&
+            c.forward.netPnL > 0 &&
+            c.forward.tradesCount >= MIN_FORWARD_TRADES &&
+            c.forward.tradesPerMonth >= MIN_TRADES_PER_MONTH &&
+            c.forward.avgDaysBetweenTrades <= MAX_AVG_DAYS_BETWEEN_TRADES;
+    });
+    validCoins.sort((a, b) => b.score - a.score);
     
     const top20 = validCoins.slice(0, 20);
     
@@ -143,14 +222,24 @@ async function runMonthlySimulation() {
     let totalPortfolioNetPnL = 0;
     
     top20.forEach(c => {
-        console.log(c.symbol + " | PF: " + c.pf.toFixed(2) + " | Trades: " + c.tradesCount + " | Net PnL (per $100 size): $" + c.netPnL.toFixed(2));
-        totalPortfolioNetPnL += c.netPnL;
+        console.log(
+            c.symbol +
+            " | Train PF: " + c.train.pf.toFixed(2) +
+            " | Forward PF: " + c.forward.pf.toFixed(2) +
+            " | Forward Trades: " + c.forward.tradesCount +
+            " | Trades/Mo: " + c.forward.tradesPerMonth.toFixed(1) +
+            " | Avg Days/Trade: " + c.forward.avgDaysBetweenTrades.toFixed(2) +
+            " | Avg Win: $" + c.forward.avgWin.toFixed(2) +
+            " | Avg Loss: $" + c.forward.avgLoss.toFixed(2) +
+            " | Forward Net PnL (per $100 size): $" + c.forward.netPnL.toFixed(2)
+        );
+        totalPortfolioNetPnL += c.forward.netPnL;
     });
 
     console.log("\\n=== Monthly Projection ===");
     console.log("Coins qualifying: " + top20.length);
-    console.log("If you invested $300 and scaled standard trade sizes to roughly $100 per setup (risking ~$1.50 per trade)...");
-    console.log("Your expected portfolio growth in 1 month: +$" + totalPortfolioNetPnL.toFixed(2));
+    console.log("Projection uses only the forward validation window after each coin passed the training window.");
+    console.log("Estimated forward-window portfolio growth from qualifying coins: +$" + totalPortfolioNetPnL.toFixed(2));
     
     const roi = (totalPortfolioNetPnL / 300) * 100;
     console.log("Monthly ROI: " + roi.toFixed(2) + "%");

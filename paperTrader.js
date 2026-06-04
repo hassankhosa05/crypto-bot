@@ -1,8 +1,11 @@
 const fs = require('fs');
 const { getExchangeInfo } = require('./exchangeInfo');
+const { TRADING_CONFIG, getRiskDistance, getTakeProfitDistance, getTradeAmountUSD } = require('./tradingConfig');
 
-const STATE_FILE = 'portfolio.json';
-const UNIVERSE_FILE = 'active_universe.json';
+const path = require('path');
+const DATA_DIR = process.env.DATA_DIR || __dirname;
+const STATE_FILE = path.join(DATA_DIR, 'portfolio.json');
+const UNIVERSE_FILE = path.join(DATA_DIR, 'active_universe.json');
 
 class PaperTrader {
     constructor(initialBalance = 300, googleSheetsLogger = null) {
@@ -56,45 +59,33 @@ class PaperTrader {
         this.resetDailyLossesIfNewDay();
 
         if (action === 'BUY' && !this.state.positions[coinSymbol]) {
-            if (this.state.dailyDrawdownUSD >= this.state.initialBalance * 0.05) {
+            if (this.state.dailyDrawdownUSD >= this.state.initialBalance * TRADING_CONFIG.dailyMaxDrawdownPct) {
                 console.log(`Daily max drawdown (5%) reached. Skipping BUY for ${coinSymbol}.`);
                 return;
             }
 
             // Dynamic Risk Sizing based on Universe Tiers and Regime
             const universe = this.loadUniverse();
-            let riskPct = 0.02; // Default 2%
             let isChoppy = false;
             
-            if (universe && universe.coins[coinSymbol]) {
-                const tier = universe.coins[coinSymbol].tier;
-                if (tier === 2) riskPct = 0.01; // 1.0% for Tier 2
-            }
             if (universe && universe.regime === 'CHOPPY') {
                 isChoppy = true;
-                riskPct *= 0.5; // Halve risk again in choppy regimes
             }
 
-            const riskUSD = this.state.balance * riskPct;
-            const stopDistance = Math.max(atr * 2.0, currentPrice * 0.005);
-            let tradeAmountUSD = (riskUSD / stopDistance) * currentPrice;
-            const tradeLimitPerCoin = this.state.balance * 0.2;
-            tradeAmountUSD = Math.min(tradeAmountUSD, tradeLimitPerCoin, this.state.balance);
-            if(tradeAmountUSD < 5) {
+            const tradeAmountUSD = getTradeAmountUSD(this.state.balance, currentPrice, atr, universe, coinSymbol);
+            if(!tradeAmountUSD) {
                 console.log(`Trade size for ${coinSymbol} under $5 limit (Choppy Regime? ${isChoppy}). Skipping.`);
                 return;
             }
             
-            // Apply 0.1% spot fee on entry
-            const fee = tradeAmountUSD * 0.001;
+            const fee = tradeAmountUSD * TRADING_CONFIG.feeRate;
             this.state.balance -= (tradeAmountUSD + fee);
             
             const coinAmount = tradeAmountUSD / currentPrice;
 
-            // Risk sizing based on V2.2 rules
-            const riskDist = atr * 2.0;
+            const riskDist = getRiskDistance(atr, currentPrice);
             const slPrice = currentPrice - riskDist;
-            const tp1Price = currentPrice + (riskDist * 3); // 2R
+            const tp1Price = currentPrice + getTakeProfitDistance(atr);
 
             this.state.positions[coinSymbol] = {
                 amount: coinAmount,
@@ -120,7 +111,7 @@ class PaperTrader {
             // Used for full exits (Stop Loss or Emergency Exit)
             const position = this.state.positions[coinSymbol];
             const sellValueUSD = position.amount * currentPrice;
-            const fee = sellValueUSD * 0.001;
+            const fee = sellValueUSD * TRADING_CONFIG.feeRate;
             const netSellValue = sellValueUSD - fee;
             
             const profitLoss = netSellValue - (position.amount * position.entryPrice);
@@ -163,7 +154,7 @@ class PaperTrader {
             return;
         }
 
-        const fee = sellValueUSD * 0.001;
+        const fee = sellValueUSD * TRADING_CONFIG.feeRate;
         const netSellValue = sellValueUSD - fee;
         
         const profitLoss = netSellValue - (sellAmount * position.entryPrice);
@@ -186,7 +177,7 @@ class PaperTrader {
 
         if (!position.tp1Hit && currentPrice >= position.tp1Price) {
             position.tp1Hit = true;
-            await this.executePartialSell(coinSymbol, currentPrice, 0.5, 'Take Profit (3R)');
+            await this.executePartialSell(coinSymbol, currentPrice, TRADING_CONFIG.takeProfitFraction, 'Take Profit');
             if (position.slPrice < position.entryPrice) {
                 position.slPrice = position.entryPrice;
             }
@@ -207,7 +198,7 @@ class PaperTrader {
         const position = this.state.positions[coinSymbol];
         
         // Trailing Stop logic: trail by 2.5 ATR (up from 2.0)
-        const newStop = currentPrice - (position.entryAtr * 2.5);
+        const newStop = currentPrice - (position.entryAtr * TRADING_CONFIG.trailingAtrMultiplier);
         if(newStop > position.slPrice){
             position.slPrice = newStop;
             this.saveState();

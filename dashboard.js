@@ -24,7 +24,7 @@ function startDashboard(port = process.env.PORT || 3000, trader) {
         });
     });
 
-    const host = process.env.BIND_IP || '127.0.0.1';
+    const host = process.env.BIND_IP || '0.0.0.0';
     serverInstance = app.listen(port, host, () => {
         console.log(`Dashboard running at http://${host}:${port}`);
     });

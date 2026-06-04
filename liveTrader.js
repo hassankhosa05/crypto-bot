@@ -1,7 +1,8 @@
 const fs = require('fs');
 const chalk = require('chalk');
-const { getUSDTBalance, placeMarketOrder, placeLimitOrder, cancelOrder, getOrderStatus } = require('./binanceApi');
+const { getUSDTBalance, placeMarketOrder, placeLimitOrder, placeOcoSellOrder, cancelOrder, cancelOrderList, getOrderStatus } = require('./binanceApi');
 const { getExchangeInfo, roundStep, roundTick } = require('./exchangeInfo');
+const { TRADING_CONFIG, getRiskDistance, getTakeProfitDistance, getTradeAmountUSD } = require('./tradingConfig');
 
 const STATE_FILE = './live_state.json';
 const delay = ms => new Promise(res => setTimeout(res, ms));
@@ -9,13 +10,17 @@ const delay = ms => new Promise(res => setTimeout(res, ms));
 class LiveTrader {
     constructor() {
         this.state = this.loadState() || {
+            balance: 0,
+            initialBalance: 0,
             positions: {},
             tradeHistory: [],
             dailyLosses: 0,
             dailyDrawdownUSD: 0,
             lastLossDate: new Date().toDateString()
         };
-        this.balance = 0;
+        if (this.state.balance === undefined) this.state.balance = 0;
+        if (this.state.initialBalance === undefined) this.state.initialBalance = 0;
+        this.balance = this.state.balance;
         this.syncBalance(); 
     }
 
@@ -52,6 +57,8 @@ class LiveTrader {
     async syncBalance() {
         try {
             this.balance = await getUSDTBalance();
+            this.state.balance = this.balance;
+            if (!this.state.initialBalance) this.state.initialBalance = this.balance;
             this.saveState();
         } catch(e) {
             console.error(chalk.red("Failed to fetch balance from Binance:", e.message));
@@ -59,8 +66,9 @@ class LiveTrader {
     }
 
     async executeHybridOrder(coinSymbol, side, amount, currentPrice, symbolRules) {
-        // Aggressive limit: 0.1% buffer
-        let limitPrice = side === 'BUY' ? currentPrice * 1.001 : currentPrice * 0.999;
+        let limitPrice = side === 'BUY'
+            ? currentPrice * (1 + TRADING_CONFIG.entryLimitBufferPct)
+            : currentPrice * (1 - TRADING_CONFIG.entryLimitBufferPct);
         limitPrice = roundTick(limitPrice, symbolRules.tickSize);
         amount = roundStep(amount, symbolRules.stepSize);
 
@@ -70,7 +78,7 @@ class LiveTrader {
             const orderId = limitOrder.orderId;
 
             // Monitoring window
-            await delay(3000);
+            await delay(TRADING_CONFIG.limitOrderWaitMs);
 
             const statusRes = await getOrderStatus(coinSymbol, orderId);
             
@@ -122,6 +130,37 @@ class LiveTrader {
         }
     }
 
+    async placeProtectionOco(coinSymbol, quantity, tpPrice, slPrice, symbolRules) {
+        const roundedQty = roundStep(quantity, symbolRules.stepSize);
+        const roundedTp = roundTick(tpPrice, symbolRules.tickSize);
+        const roundedStop = roundTick(slPrice, symbolRules.tickSize);
+        const roundedStopLimit = roundTick(slPrice * (1 - TRADING_CONFIG.stopLimitBufferPct), symbolRules.tickSize);
+
+        if (roundedQty <= 0) return null;
+
+        try {
+            const oco = await placeOcoSellOrder(coinSymbol, roundedQty, roundedTp, roundedStop, roundedStopLimit);
+            console.log(chalk.green(`Placed protective OCO for ${coinSymbol}. TP: ${roundedTp}, SL: ${roundedStop}`));
+            return oco;
+        } catch (e) {
+            console.error(chalk.red(`FAILED to place protective OCO for ${coinSymbol}:`, e.response ? JSON.stringify(e.response.data) : e.message));
+            return null;
+        }
+    }
+
+    async cancelProtectionOco(coinSymbol) {
+        const position = this.state.positions[coinSymbol];
+        if (!position?.protectionOrderListId) return;
+
+        try {
+            await cancelOrderList(coinSymbol, position.protectionOrderListId);
+            delete position.protectionOrderListId;
+            this.saveState();
+        } catch (e) {
+            console.error(chalk.red(`FAILED to cancel protective OCO for ${coinSymbol}:`, e.response ? JSON.stringify(e.response.data) : e.message));
+        }
+    }
+
     async executeTrade(coinSymbol, action, currentPrice, strategyName, reason = '', atr = 0) {
         this.resetDailyLossesIfNewDay();
         await this.syncBalance();
@@ -136,27 +175,15 @@ class LiveTrader {
         if (action === 'BUY' && !this.state.positions[coinSymbol]) {
             // Drawdown logic based on total portfolio value instead of free USDT balance
             const portfolioValue = this.getPortfolioValue(this.state.currentPrices || {});
-            if (this.state.dailyDrawdownUSD >= portfolioValue * 0.05) {
+            if (this.state.dailyDrawdownUSD >= portfolioValue * TRADING_CONFIG.dailyMaxDrawdownPct) {
                 console.log(`Daily max drawdown reached (Portfolio: $${portfolioValue.toFixed(2)}). Skipping BUY.`);
                 return;
             }
 
             const universe = this.loadUniverse();
-            let riskPct = 0.02; 
-            if (universe && universe.coins[coinSymbol]) {
-                if (universe.coins[coinSymbol].tier === 2) riskPct = 0.01;
-            }
-            if (universe && universe.regime === 'CHOPPY') {
-                riskPct *= 0.5;
-            }
-
-            const riskUSD = this.balance * riskPct;
-            const stopDistance = Math.max(atr * 2.0, currentPrice * 0.005);
-            let tradeAmountUSD = (riskUSD / stopDistance) * currentPrice;
-            const tradeLimitPerCoin = this.balance * 0.2;
-            tradeAmountUSD = Math.min(tradeAmountUSD, tradeLimitPerCoin, this.balance * 0.95);
+            let tradeAmountUSD = getTradeAmountUSD(this.balance, currentPrice, atr, universe, coinSymbol, symbolRules.minNotional);
             
-            if (tradeAmountUSD < Math.max(5, symbolRules.minNotional)) {
+            if (!tradeAmountUSD) {
                 console.log(`Trade size under minimum for ${coinSymbol}. Skipping.`);
                 return;
             }
@@ -167,19 +194,22 @@ class LiveTrader {
                 const result = await this.executeHybridOrder(coinSymbol, 'BUY', coinAmount, currentPrice, symbolRules);
                 const actualQty = result.executedQty;
                 
-                const riskDist = atr * 2.0;
-                const slPrice = currentPrice - riskDist;
-                const tp1Price = currentPrice + (riskDist * 3);
+                const riskDist = getRiskDistance(atr, currentPrice);
+                const entryPrice = result.avgPrice || currentPrice;
+                const slPrice = entryPrice - riskDist;
+                const tp1Price = entryPrice + getTakeProfitDistance(atr);
+                const oco = await this.placeProtectionOco(coinSymbol, actualQty, tp1Price, slPrice, symbolRules);
 
                 this.state.positions[coinSymbol] = {
                     amount: actualQty,
                     totalSize: actualQty,
-                    entryPrice: result.avgPrice || currentPrice,
+                    entryPrice,
                     slPrice: slPrice,
                     tp1Price: tp1Price,
                     tp1Hit: false,
                     riskDist: riskDist,
                     entryAtr: atr,
+                    protectionOrderListId: oco?.orderListId,
                     strategy: strategyName,
                     timestamp: Date.now()
                 };
@@ -195,6 +225,8 @@ class LiveTrader {
             const position = this.state.positions[coinSymbol];
             let sellAmount = position.amount;
 
+            await this.cancelProtectionOco(coinSymbol);
+
             // Warn if the actual sell order is below minNotional itself
             if (symbolRules && (sellAmount * currentPrice < symbolRules.minNotional)) {
                 console.warn(chalk.red(`[WARNING] Full exit amount for ${coinSymbol} ($${(sellAmount * currentPrice).toFixed(2)}) is below exchange minNotional ($${symbolRules.minNotional}). Order may fail on exchange.`));
@@ -205,7 +237,8 @@ class LiveTrader {
                 const actualSold = result.executedQty;
                 
                 const sellValueUSD = actualSold * currentPrice;
-                const profitLoss = sellValueUSD - (actualSold * position.entryPrice);
+                const fee = sellValueUSD * TRADING_CONFIG.feeRate;
+                const profitLoss = (sellValueUSD - fee) - (actualSold * position.entryPrice);
                 if (profitLoss < 0) {
                     this.state.dailyLosses += 1;
                     this.state.dailyDrawdownUSD += Math.abs(profitLoss);
@@ -284,8 +317,9 @@ class LiveTrader {
         this.resetDailyLossesIfNewDay();
 
         if (!position.tp1Hit && currentPrice >= position.tp1Price) {
+            if (position.protectionOrderListId) return false;
             position.tp1Hit = true;
-            await this.executePartialSell(coinSymbol, currentPrice, 0.5, 'Take Profit (3R)');
+            await this.executePartialSell(coinSymbol, currentPrice, TRADING_CONFIG.takeProfitFraction, 'Take Profit');
             if (position.slPrice < position.entryPrice) {
                 position.slPrice = position.entryPrice;
             }
@@ -293,6 +327,7 @@ class LiveTrader {
         }
 
         if (currentPrice <= position.slPrice) {
+            if (position.protectionOrderListId) return false;
             await this.executeTrade(coinSymbol, 'SELL', currentPrice, position.strategy, 'Stop Loss');
             return true;
         }
@@ -311,9 +346,16 @@ class LiveTrader {
         }
         
         // Trailing Stop logic: trail by 2.5 ATR (up from 2.0)
-        const newStop = currentPrice - (position.entryAtr * 2.5);
+        const newStop = currentPrice - (position.entryAtr * TRADING_CONFIG.trailingAtrMultiplier);
         if(newStop > position.slPrice){
             position.slPrice = newStop;
+            if (position.protectionOrderListId) {
+                await this.cancelProtectionOco(coinSymbol);
+                const exInfo = await getExchangeInfo();
+                const symbolRules = exInfo[coinSymbol];
+                const oco = await this.placeProtectionOco(coinSymbol, position.amount, position.tp1Price, position.slPrice, symbolRules);
+                position.protectionOrderListId = oco?.orderListId;
+            }
             this.saveState();
             console.log(require('chalk').blue(`Trailing Stop moved up for ${coinSymbol} to ${newStop.toFixed(4)}`));
         }

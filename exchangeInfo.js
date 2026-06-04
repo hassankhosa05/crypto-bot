@@ -11,7 +11,8 @@ async function getExchangeInfo() {
             if (symbolInfo.symbol.endsWith('USDT')) {
                 const lotSizeFilter = symbolInfo.filters.find(f => f.filterType === 'LOT_SIZE');
                 const priceFilter = symbolInfo.filters.find(f => f.filterType === 'PRICE_FILTER');
-                const minNotionalFilter = symbolInfo.filters.find(f => f.filterType === 'NOTIONAL');
+                const minNotionalFilter = symbolInfo.filters.find(f => f.filterType === 'NOTIONAL') ||
+                    symbolInfo.filters.find(f => f.filterType === 'MIN_NOTIONAL');
                 
                 exchangeInfoCache[symbolInfo.symbol] = {
                     stepSize: lotSizeFilter ? parseFloat(lotSizeFilter.stepSize) : 1,

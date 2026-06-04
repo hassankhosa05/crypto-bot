@@ -5,6 +5,7 @@ const { fetchMidCapCoins, fetchHistoricalData, delay } = require('./dataFetcher'
 const { evaluateTradeV2: evaluateTrade, checkEmergencyExitV2: checkEmergencyExit } = require('./strategyV2');
 const PaperTrader = require('./paperTrader');
 const { startDashboard } = require('./dashboard');
+const { TRADING_CONFIG } = require('./tradingConfig');
 
 let trader;
 if (process.env.TRADE_MODE === 'LIVE') {
@@ -95,7 +96,7 @@ async function startBot() {
         const historicalData = await fetchHistoricalData(coin.id);
         if (historicalData) {
             historicalDataStore[coin.symbol] = historicalData;
-            streamNames.push(`${coin.symbol.toLowerCase()}@kline_15m`);
+            streamNames.push(`${coin.symbol.toLowerCase()}@kline_${TRADING_CONFIG.timeframe}`);
             
             // Calculate and cache initial emergency exit flag using correct entryAtr key
             const initPosition = trader.state.positions[coin.symbol];
@@ -116,7 +117,7 @@ async function startBot() {
     
     // 3. Start Dashboard (Only once across reconnects)
     if (!dashboardStarted) {
-        startDashboard(3000, trader);
+        startDashboard(undefined, trader);
         dashboardStarted = true;
     }
 
@@ -149,7 +150,7 @@ async function startBot() {
             await trader.checkRiskManagement(symbol, currentPrice);
         }
 
-        // Strategy Execution (Runs ONLY exactly when a 5m candle closes)
+        // Strategy Execution runs only when the shared timeframe candle closes.
         if (isClosed) {
             console.log(chalk.dim(`[${symbol}] 15m Candle Closed at $${currentPrice}`));
             

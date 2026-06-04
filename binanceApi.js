@@ -49,12 +49,46 @@ async function placeLimitOrder(symbol, side, quantity, price) {
     return response.data;
 }
 
+async function placeOcoSellOrder(symbol, quantity, takeProfitPrice, stopPrice, stopLimitPrice) {
+    const timestamp = Date.now();
+    const params = new URLSearchParams({
+        symbol,
+        side: 'SELL',
+        quantity: String(quantity),
+        aboveType: 'LIMIT_MAKER',
+        abovePrice: String(takeProfitPrice),
+        belowType: 'STOP_LOSS_LIMIT',
+        belowStopPrice: String(stopPrice),
+        belowPrice: String(stopLimitPrice),
+        belowTimeInForce: 'GTC',
+        timestamp: String(timestamp)
+    });
+    const queryString = params.toString();
+    const signature = getSignature(queryString);
+
+    const response = await axios.post(`${BASE_URL}/api/v3/orderList/oco?${queryString}&signature=${signature}`, null, {
+        headers: { 'X-MBX-APIKEY': API_KEY }
+    });
+    return response.data;
+}
+
 async function cancelOrder(symbol, orderId) {
     const timestamp = Date.now();
     const queryString = `symbol=${symbol}&orderId=${orderId}&timestamp=${timestamp}`;
     const signature = getSignature(queryString);
     
     const response = await axios.delete(`${BASE_URL}/api/v3/order?${queryString}&signature=${signature}`, {
+        headers: { 'X-MBX-APIKEY': API_KEY }
+    });
+    return response.data;
+}
+
+async function cancelOrderList(symbol, orderListId) {
+    const timestamp = Date.now();
+    const queryString = `symbol=${symbol}&orderListId=${orderListId}&timestamp=${timestamp}`;
+    const signature = getSignature(queryString);
+
+    const response = await axios.delete(`${BASE_URL}/api/v3/orderList?${queryString}&signature=${signature}`, {
         headers: { 'X-MBX-APIKEY': API_KEY }
     });
     return response.data;
@@ -82,4 +116,4 @@ async function testOrder(symbol, side, quantity) {
     return response.data;
 }
 
-module.exports = { getAccountInfo, getUSDTBalance, placeMarketOrder, placeLimitOrder, cancelOrder, getOrderStatus, testOrder };
+module.exports = { getAccountInfo, getUSDTBalance, placeMarketOrder, placeLimitOrder, placeOcoSellOrder, cancelOrder, cancelOrderList, getOrderStatus, testOrder };
