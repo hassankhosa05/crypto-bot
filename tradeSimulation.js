@@ -49,12 +49,51 @@ function updateSimulatedPosition(position, candle, emergencyExit = false) {
     let closed = false;
     const events = [];
 
+    // Advance trailing stop
     position.slPrice = Math.max(
         position.slPrice,
         candle.close - (position.atr * TRADING_CONFIG.trailingAtrMultiplier)
     );
 
-    if (!position.tp1Hit && candle.high >= position.tp1Price) {
+    const tpTriggered = !position.tp1Hit && candle.high >= position.tp1Price;
+    const slTriggered = candle.low <= position.slPrice;
+
+    if (tpTriggered && slTriggered) {
+        // Both TP and SL hit within the same candle. Randomly determine which fired first
+        // to eliminate the systematic look-ahead bias of always assuming TP wins.
+        if (Math.random() < 0.5) {
+            // TP fires first
+            position.tp1Hit = true;
+            const sellAmount = position.totalSize * TRADING_CONFIG.takeProfitFraction;
+            const sale = sellValue(position, sellAmount, position.tp1Price);
+            position.remainingSize -= sellAmount;
+            position.pnlTracker += sale.pnl;
+            position.feeTracker += sale.fee;
+            exitCash += sale.net;
+            position.slPrice = Math.max(position.slPrice, position.entryPrice);
+            events.push('TP1');
+
+            // After partial TP the SL may have moved to breakeven — re-check if remaining size stops out
+            if (position.remainingSize > 0.0001 && candle.low <= position.slPrice) {
+                const slSale = sellValue(position, position.remainingSize, position.slPrice);
+                position.pnlTracker += slSale.pnl;
+                position.feeTracker += slSale.fee;
+                exitCash += slSale.net;
+                position.remainingSize = 0;
+                closed = true;
+                events.push('Stop');
+            }
+        } else {
+            // SL fires first — wipes out the full position
+            const sale = sellValue(position, position.remainingSize, position.slPrice);
+            position.pnlTracker += sale.pnl;
+            position.feeTracker += sale.fee;
+            exitCash += sale.net;
+            position.remainingSize = 0;
+            closed = true;
+            events.push('Stop');
+        }
+    } else if (tpTriggered) {
         position.tp1Hit = true;
         const sellAmount = position.totalSize * TRADING_CONFIG.takeProfitFraction;
         const sale = sellValue(position, sellAmount, position.tp1Price);
@@ -64,9 +103,7 @@ function updateSimulatedPosition(position, candle, emergencyExit = false) {
         exitCash += sale.net;
         position.slPrice = Math.max(position.slPrice, position.entryPrice);
         events.push('TP1');
-    }
-
-    if (candle.low <= position.slPrice) {
+    } else if (slTriggered) {
         const sale = sellValue(position, position.remainingSize, position.slPrice);
         position.pnlTracker += sale.pnl;
         position.feeTracker += sale.fee;

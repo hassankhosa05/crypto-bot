@@ -21,7 +21,8 @@ function simulateSymbol(data, options = {}) {
         initialBalance = 1000,
         fixedTradeUSD = null,
         universe = null,
-        minNotional = 5
+        minNotional = 5,
+        regime = 'TRENDING'
     } = options;
 
     let balance = initialBalance;
@@ -34,7 +35,7 @@ function simulateSymbol(data, options = {}) {
         const candle = slice[slice.length - 1];
 
         if (!position) {
-            const result = evaluateTradeV2({ symbol, current_price: candle.close }, slice);
+            const result = evaluateTradeV2({ symbol, current_price: candle.close }, slice, regime);
             if (result.signal !== 'BUY') continue;
 
             const nextPosition = createPosition({
@@ -84,6 +85,7 @@ function simulateSymbol(data, options = {}) {
     };
 }
 
+// 2-way split: train (first trainSplit%) / forward (remaining%)
 function simulateWalkForward(data, options = {}) {
     const warmup = options.warmupCandles || 300;
     const split = options.trainSplit || 0.7;
@@ -93,13 +95,31 @@ function simulateWalkForward(data, options = {}) {
     if (splitIndex <= warmup || splitIndex >= data.length - 5) return null;
 
     return {
-        train: simulateSymbol(data, { ...options, startIndex: warmup, endIndex: splitIndex }),
-        forward: simulateSymbol(data, { ...options, startIndex: splitIndex, endIndex: data.length })
+        train:   simulateSymbol(data, { ...options, startIndex: warmup,      endIndex: splitIndex }),
+        forward: simulateSymbol(data, { ...options, startIndex: splitIndex,  endIndex: data.length })
+    };
+}
+
+// 3-way split: train (60%) / validate (20%) / holdout (20%)
+// validate is used for threshold checks; holdout is a true unseen confirmation window.
+function simulateThreeWay(data, options = {}) {
+    const warmup = options.warmupCandles || 300;
+    const tradable = data.length - warmup;
+    const trainEnd    = warmup + Math.floor(tradable * 0.60);
+    const validateEnd = warmup + Math.floor(tradable * 0.80);
+
+    if (trainEnd <= warmup || validateEnd <= trainEnd || validateEnd >= data.length - 5) return null;
+
+    return {
+        train:    simulateSymbol(data, { ...options, startIndex: warmup,       endIndex: trainEnd }),
+        validate: simulateSymbol(data, { ...options, startIndex: trainEnd,     endIndex: validateEnd }),
+        holdout:  simulateSymbol(data, { ...options, startIndex: validateEnd,  endIndex: data.length })
     };
 }
 
 module.exports = {
     calculateTestedDays,
     simulateSymbol,
-    simulateWalkForward
+    simulateWalkForward,
+    simulateThreeWay
 };
