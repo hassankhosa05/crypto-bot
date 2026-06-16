@@ -257,7 +257,14 @@ async function startBot(isReconnect = false) {
                 const coinObj = allCoinsToTrack.find(c => c.symbol === symbol) || { symbol, current_price: currentPrice };
                 coinObj.current_price = currentPrice;
                 const decision = evaluateTrade(coinObj, historicalDataStore[symbol], activeUniverse.regime);
-                if (decision.signal === 'BUY') {
+                
+                if (decision.signal === 'NO TRADE') {
+                    const logObj = { symbol: symbol, failedReason: decision.failedReason || decision.reason };
+                    if (decision.meta) Object.assign(logObj, decision.meta);
+                    require('fs').appendFileSync('./trade_evaluations.jsonl', JSON.stringify(logObj) + '\n');
+                } else if (decision.signal === 'BUY') {
+                    const logObj = { symbol: symbol, action: 'BUY', score: decision.score, reason: decision.reason };
+                    require('fs').appendFileSync('./trade_evaluations.jsonl', JSON.stringify(logObj) + '\n');
                     await trader.executeTrade(symbol, 'BUY', currentPrice, 'Confluence Engine', decision.reason, decision.atr);
                 }
             }

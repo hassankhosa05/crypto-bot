@@ -36,12 +36,12 @@ function isBullStructure(closes) {
 // Choppy markets mean-revert; a score-6 breakout entry systematically buys local tops.
 function evaluateTradeV2(coin, historicalData, regime = 'TRENDING') {
     if (historicalData.length < 50) {
-        return { signal: 'NO TRADE', score: 0, reason: 'Insufficient history', atr: 0 };
+        return { signal: 'NO TRADE', score: 0, failedReason: 'Insufficient history', atr: 0 };
     }
 
     // Block all new entries in choppy regime — breakout logic buys tops into reversals.
     if (regime === 'CHOPPY') {
-        return { signal: 'NO TRADE', score: 0, reason: 'Choppy regime: entries suppressed', atr: 0 };
+        return { signal: 'NO TRADE', score: 0, failedReason: 'Choppy regime', atr: 0 };
     }
 
     const closes  = historicalData.map(x => x.close);
@@ -73,10 +73,10 @@ function evaluateTradeV2(coin, historicalData, regime = 'TRENDING') {
     // Core filters
     const trendValid = currentPrice > currentEMA50 && currentEMA50 > ema50_5barsAgo;
 
-    if (!trendValid)    return { signal: 'NO TRADE', score: 0, reason: 'Trend invalid',     atr: currentATR };
-    if (!structureBull) return { signal: 'NO TRADE', score: 0, reason: 'Structure invalid', atr: currentATR };
-    if (rvol < 1.30)    return { signal: 'NO TRADE', score: 0, reason: 'Low RVOL',          atr: currentATR };
-    if (currentPrice < vwap) return { signal: 'NO TRADE', score: 0, reason: 'Below VWAP',  atr: currentATR };
+    if (!trendValid)    return { signal: 'NO TRADE', score: 0, failedReason: 'Trend invalid',     atr: currentATR };
+    if (!structureBull) return { signal: 'NO TRADE', score: 0, failedReason: 'MarketStructure', atr: currentATR };
+    if (rvol < 1.30)    return { signal: 'NO TRADE', score: 0, failedReason: 'RVOL',          atr: currentATR, meta: { rvol: parseFloat(rvol.toFixed(2)), required: 1.3 } };
+    if (currentPrice < vwap) return { signal: 'NO TRADE', score: 0, failedReason: 'Below VWAP',  atr: currentATR, meta: { price: currentPrice, vwap } };
 
     // Scoring
     let score = 0;
@@ -122,7 +122,7 @@ function evaluateTradeV2(coin, historicalData, regime = 'TRENDING') {
         };
     }
 
-    return { signal: 'NO TRADE', score, reason: `Weak confluence ${score}`, atr: currentATR };
+    return { signal: 'NO TRADE', score, failedReason: 'Weak confluence', atr: currentATR, meta: { score, required: 6 } };
 }
 
 function checkEmergencyExitV2(historicalData, entryPrice, currentATR) {

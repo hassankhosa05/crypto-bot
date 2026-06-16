@@ -30,10 +30,26 @@ function startDashboard(port = process.env.PORT || 3000, trader) {
         if (!trader) return res.status(500).json({ error: 'Trader instance not provided' });
         const universe = typeof trader.loadUniverse === 'function' ? trader.loadUniverse() : null;
         const rep = buildReport(trader.state, universe);
+
+        let recentEvaluations = [];
+        try {
+            const fs = require('fs');
+            const evalPath = path.join(__dirname, 'trade_evaluations.jsonl');
+            if (fs.existsSync(evalPath)) {
+                const lines = fs.readFileSync(evalPath, 'utf8').trim().split('\n');
+                recentEvaluations = lines.slice(-100).filter(l => l).map(l => {
+                    try { return JSON.parse(l); } catch(e) { return null; }
+                }).filter(Boolean);
+            }
+        } catch(e) {
+            console.error("Error reading trade evaluations:", e.message);
+        }
+
         res.json({
             ts: new Date().toISOString(),
             regime: rep.regime,
             regimeFlips: regimeFlips().flips,
+            recentEvaluations: recentEvaluations.reverse(),
             overall: rep.overall,
             perCoin: rep.rows.reduce((acc, r) => {
                 acc[r.coin] = { ...r.live, holdoutPf: r.holdoutPf, decay: r.decay, flag: r.flag };
