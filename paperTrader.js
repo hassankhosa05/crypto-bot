@@ -109,9 +109,9 @@ class PaperTrader {
             this.state.balance -= (tradeAmountUSD + fee);
 
             const coinAmount = tradeAmountUSD / currentPrice;
-            const riskDist  = getRiskDistance(atr, currentPrice);
-            const slPrice   = currentPrice - riskDist;
-            const tp1Price  = currentPrice + getTakeProfitDistance(atr);
+            const slPrice   = currentPrice - (atr * 1.2);
+            const tp1Price  = currentPrice + (atr * 1.5);
+            const tp2Price  = currentPrice + (atr * 3.0);
 
             this.state.positions[coinSymbol] = {
                 amount: coinAmount,
@@ -119,8 +119,8 @@ class PaperTrader {
                 entryPrice: currentPrice,
                 slPrice,
                 tp1Price,
+                tp2Price,
                 tp1Hit: false,
-                riskDist,
                 entryAtr: atr,
                 strategy: strategyName,
                 timestamp: Date.now()
@@ -201,12 +201,17 @@ class PaperTrader {
 
         if (!position.tp1Hit && currentPrice >= position.tp1Price) {
             position.tp1Hit = true;
-            await this.executePartialSell(coinSymbol, currentPrice, TRADING_CONFIG.takeProfitFraction, 'Take Profit');
+            await this.executePartialSell(coinSymbol, currentPrice, 0.5, 'Take Profit 1');
             // Move stop to breakeven after partial TP
             if (position.slPrice < position.entryPrice) {
                 position.slPrice = position.entryPrice;
             }
             this.saveState();
+        }
+
+        if (this.state.positions[coinSymbol] && position.tp1Hit && currentPrice >= position.tp2Price) {
+            await this.executeTrade(coinSymbol, 'SELL', currentPrice, position.strategy, 'Take Profit 2 (Runner)');
+            return true;
         }
 
         if (this.state.positions[coinSymbol] && currentPrice <= position.slPrice) {
@@ -222,11 +227,13 @@ class PaperTrader {
 
         const position = this.state.positions[coinSymbol];
 
-        const newStop = currentPrice - (position.entryAtr * TRADING_CONFIG.trailingAtrMultiplier);
-        if (newStop > position.slPrice) {
-            position.slPrice = newStop;
-            this.saveState();
-            console.log(require('chalk').blue(`Trailing Stop moved up for ${coinSymbol} to ${newStop.toFixed(4)}`));
+        if (position.tp1Hit) {
+            const newStop = currentPrice - (position.entryAtr * 1.0); // trail at 1 x ATR after TP1
+            if (newStop > position.slPrice) {
+                position.slPrice = newStop;
+                this.saveState();
+                console.log(require('chalk').blue(`Trailing Stop moved up for ${coinSymbol} to ${newStop.toFixed(4)}`));
+            }
         }
 
         if (emergencyExitFlag) {

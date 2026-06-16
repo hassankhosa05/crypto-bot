@@ -40,7 +40,7 @@ async function fetchHistoricalData(symbol, retries = 3, delayMs = 1000) {
                 params: {
                     symbol: symbol,
                     interval: TRADING_CONFIG.timeframe,
-                    limit: 100
+                    limit: 1000
                 }
             });
 

@@ -145,6 +145,12 @@ class LiveTrader {
                         if (position.protectionOrderListId) {
                             try { await cancelOrderList(coinSymbol, position.protectionOrderListId); } catch (_) {}
                         }
+                        if (position.protectionOrderListId1) {
+                            try { await cancelOrderList(coinSymbol, position.protectionOrderListId1); } catch (_) {}
+                        }
+                        if (position.protectionOrderListId2) {
+                            try { await cancelOrderList(coinSymbol, position.protectionOrderListId2); } catch (_) {}
+                        }
 
                         const lastPrice = (this.state.currentPrices && this.state.currentPrices[coinSymbol]) || position.entryPrice;
                         const grossPnL = (position.amount * lastPrice) - (position.amount * position.entryPrice);
@@ -302,14 +308,21 @@ class LiveTrader {
 
     async cancelProtectionOco(coinSymbol) {
         const position = this.state.positions[coinSymbol];
-        if (!position?.protectionOrderListId) return;
-        try {
-            await cancelOrderList(coinSymbol, position.protectionOrderListId);
-            delete position.protectionOrderListId;
-            this.saveState();
-        } catch (e) {
-            console.error(chalk.red(`FAILED to cancel OCO for ${coinSymbol}:`, e.response ? JSON.stringify(e.response.data) : e.message));
+        if (!position) return;
+        
+        if (position.protectionOrderListId1) {
+            try { await cancelOrderList(coinSymbol, position.protectionOrderListId1); } catch (_) {}
+            delete position.protectionOrderListId1;
         }
+        if (position.protectionOrderListId2) {
+            try { await cancelOrderList(coinSymbol, position.protectionOrderListId2); } catch (_) {}
+            delete position.protectionOrderListId2;
+        }
+        if (position.protectionOrderListId) {
+            try { await cancelOrderList(coinSymbol, position.protectionOrderListId); } catch (_) {}
+            delete position.protectionOrderListId;
+        }
+        this.saveState();
     }
 
     async executeTrade(coinSymbol, action, currentPrice, strategyName, reason = '', atr = 0) {
@@ -360,10 +373,25 @@ class LiveTrader {
                     const result = await this.executeHybridOrder(coinSymbol, 'BUY', coinAmount, currentPrice, symbolRules);
                     const actualQty   = result.executedQty;
                     const entryPrice  = result.avgPrice || currentPrice;
-                    const riskDist    = getRiskDistance(atr, entryPrice);
-                    const slPrice     = entryPrice - riskDist;
-                    const tp1Price    = entryPrice + getTakeProfitDistance(atr);
-                    const oco = await this.placeProtectionOco(coinSymbol, actualQty, tp1Price, slPrice, symbolRules);
+                    const slPrice     = entryPrice - (atr * 1.2);
+                    const tp1Price    = entryPrice + (atr * 1.5);
+                    const tp2Price    = entryPrice + (atr * 3.0);
+                    
+                    let oco1 = null;
+                    let oco2 = null;
+                    const qty1 = roundStep(actualQty * 0.5, symbolRules.stepSize);
+                    const qty2 = roundStep(actualQty - qty1, symbolRules.stepSize);
+                    const minNotional = parseFloat(symbolRules.minNotional) || 5;
+                    const canSplit = (qty1 * entryPrice >= minNotional) && (qty2 * entryPrice >= minNotional) && (qty1 > 0) && (qty2 > 0);
+
+                    if (canSplit) {
+                        console.log(chalk.yellow(`Placing split OCO orders for ${coinSymbol}: 50% at TP1 (${tp1Price.toFixed(4)}) and 50% at TP2 (${tp2Price.toFixed(4)})`));
+                        oco1 = await this.placeProtectionOco(coinSymbol, qty1, tp1Price, slPrice, symbolRules);
+                        oco2 = await this.placeProtectionOco(coinSymbol, qty2, tp2Price, slPrice, symbolRules);
+                    } else {
+                        console.log(chalk.yellow(`Position size too small to split. Placing single OCO for full size ${actualQty} at TP1 (${tp1Price.toFixed(4)})`));
+                        oco1 = await this.placeProtectionOco(coinSymbol, actualQty, tp1Price, slPrice, symbolRules);
+                    }
 
                     this.state.positions[coinSymbol] = {
                         amount: actualQty,
@@ -371,10 +399,12 @@ class LiveTrader {
                         entryPrice,
                         slPrice,
                         tp1Price,
+                        tp2Price,
                         tp1Hit: false,
-                        riskDist,
                         entryAtr: atr,
-                        protectionOrderListId: oco?.orderListId,
+                        protectionOrderListId1: oco1?.orderListId || null,
+                        protectionOrderListId2: oco2?.orderListId || null,
+                        canSplit,
                         strategy: strategyName,
                         timestamp: Date.now()
                     };
@@ -534,20 +564,15 @@ class LiveTrader {
                     const freeQty = holding ? parseFloat(holding.free) : 0;
 
                     if (freeQty < position.amount * 0.01) {
-                        // Exchange already sold via OCO — clean up state
                         console.log(chalk.yellow(`[ALERT] OCO already executed for ${coinSymbol}. Cleaning up state.`));
-                        if (position.protectionOrderListId) {
-                            try { await cancelOrderList(coinSymbol, position.protectionOrderListId); } catch (_) {}
-                        }
+                        await this.cancelProtectionOco(coinSymbol);
                         delete this.state.positions[coinSymbol];
                         this.saveState();
                         return true;
                     }
-                } catch (_) { /* If balance check fails, proceed with the sell anyway */ }
+                } catch (_) {}
 
-                if (position.protectionOrderListId) {
-                    try { await cancelOrderList(coinSymbol, position.protectionOrderListId); delete position.protectionOrderListId; } catch (_) {}
-                }
+                await this.cancelProtectionOco(coinSymbol);
 
                 const exInfo = await getExchangeInfo();
                 const symbolRules = exInfo[coinSymbol];
@@ -555,21 +580,44 @@ class LiveTrader {
                 return true;
             }
 
+            // TP1 Hit checking
             if (!position.tp1Hit && currentPrice >= position.tp1Price) {
-                if (position.protectionOrderListId) return false; // OCO handles it
                 position.tp1Hit = true;
-                // Use _doPartialSell (no lock) — we already hold the symbol lock here
-                const exInfoTp = await getExchangeInfo();
-                const rulesTp  = exInfoTp[coinSymbol];
-                if (rulesTp) await this._doPartialSell(coinSymbol, currentPrice, TRADING_CONFIG.takeProfitFraction, 'Take Profit', rulesTp, position);
-                if (this.state.positions[coinSymbol] && position.slPrice < position.entryPrice) {
-                    position.slPrice = position.entryPrice;
+                position.protectionOrderListId1 = null; // OCO 1 filled
+
+                if (position.canSplit && position.protectionOrderListId2) {
+                    const exInfo = await getExchangeInfo();
+                    const symbolRules = exInfo[coinSymbol];
+
+                    const oldOcoId = position.protectionOrderListId2;
+                    try {
+                        await cancelOrderList(coinSymbol, oldOcoId);
+                    } catch (_) {}
+                    delete position.protectionOrderListId2;
+
+                    const newStop = Math.max(position.slPrice, position.entryPrice);
+                    position.slPrice = newStop;
+
+                    const remainingQty = roundStep(position.amount - (position.totalSize * 0.5), symbolRules.stepSize);
+                    if (remainingQty > 0) {
+                        const newOco = await this.placeProtectionOco(coinSymbol, remainingQty, position.tp2Price, newStop, symbolRules);
+                        if (newOco) {
+                            position.protectionOrderListId2 = newOco.orderListId;
+                        }
+                    }
+                } else if (!position.canSplit) {
+                    if (!position.protectionOrderListId && !position.protectionOrderListId1) {
+                        const exInfoTp = await getExchangeInfo();
+                        const rulesTp  = exInfoTp[coinSymbol];
+                        if (rulesTp) await this._doPartialSell(coinSymbol, currentPrice, 1.0, 'Take Profit (Full Exit due to size)', rulesTp, position);
+                    }
                 }
                 this.saveState();
             }
 
+            // Normal stop check (fallback if OCO fails to trigger or not yet placed)
             if (this.state.positions[coinSymbol] && currentPrice <= position.slPrice) {
-                if (position.protectionOrderListId) return false; // OCO handles it
+                if (position.protectionOrderListId1 || position.protectionOrderListId2 || position.protectionOrderListId) return false;
                 const exInfo = await getExchangeInfo();
                 const symbolRules = exInfo[coinSymbol];
                 if (symbolRules) await this._doSell(coinSymbol, currentPrice, position, symbolRules, 'Stop Loss');
@@ -587,34 +635,54 @@ class LiveTrader {
 
             if (position.lastAttemptTime && Date.now() - position.lastAttemptTime < 10000) return false;
 
-            const newStop = currentPrice - (position.entryAtr * TRADING_CONFIG.trailingAtrMultiplier);
-            if (newStop > position.slPrice) {
-                if (position.protectionOrderListId) {
+            if (position.tp1Hit) {
+                const newStop = currentPrice - (position.entryAtr * 1.0); // trail at 1 x ATR after TP1
+                if (newStop > position.slPrice) {
                     const exInfo = await getExchangeInfo();
                     const symbolRules = exInfo[coinSymbol];
                     const oldStop = position.slPrice;
-                    const oldOcoId = position.protectionOrderListId;
 
-                    // Cancel old OCO first (exchange won't accept two concurrent OCOs per symbol/side)
-                    await this.cancelProtectionOco(coinSymbol);
+                    if (position.canSplit && position.protectionOrderListId2) {
+                        const oldOcoId = position.protectionOrderListId2;
+                        try {
+                            await cancelOrderList(coinSymbol, oldOcoId);
+                        } catch (_) {}
+                        delete position.protectionOrderListId2;
 
-                    const newOco = await this.placeProtectionOco(coinSymbol, position.amount, position.tp1Price, newStop, symbolRules);
-                    if (newOco) {
-                        position.slPrice = newStop;
-                        position.protectionOrderListId = newOco.orderListId;
-                        console.log(chalk.blue(`Trailing Stop moved for ${coinSymbol}: ${oldStop.toFixed(4)} → ${newStop.toFixed(4)}`));
+                        const remainingQty = roundStep(position.amount, symbolRules.stepSize);
+                        const newOco = await this.placeProtectionOco(coinSymbol, remainingQty, position.tp2Price, newStop, symbolRules);
+                        if (newOco) {
+                            position.slPrice = newStop;
+                            position.protectionOrderListId2 = newOco.orderListId;
+                            console.log(chalk.blue(`Trailing Stop moved for ${coinSymbol}: ${oldStop.toFixed(4)} → ${newStop.toFixed(4)}`));
+                        } else {
+                            console.error(chalk.red(`OCO replacement failed for ${coinSymbol}. Restoring original stop.`));
+                            const restore = await this.placeProtectionOco(coinSymbol, remainingQty, position.tp2Price, oldStop, symbolRules);
+                            position.protectionOrderListId2 = restore?.orderListId;
+                        }
+                    } else if (!position.canSplit && position.protectionOrderListId1) {
+                        const oldOcoId = position.protectionOrderListId1;
+                        try {
+                            await cancelOrderList(coinSymbol, oldOcoId);
+                        } catch (_) {}
+                        delete position.protectionOrderListId1;
+
+                        const remainingQty = roundStep(position.amount, symbolRules.stepSize);
+                        const newOco = await this.placeProtectionOco(coinSymbol, remainingQty, position.tp1Price, newStop, symbolRules);
+                        if (newOco) {
+                            position.slPrice = newStop;
+                            position.protectionOrderListId1 = newOco.orderListId;
+                            console.log(chalk.blue(`Trailing Stop moved for ${coinSymbol} (unsplit): ${oldStop.toFixed(4)} → ${newStop.toFixed(4)}`));
+                        } else {
+                            const restore = await this.placeProtectionOco(coinSymbol, remainingQty, position.tp1Price, oldStop, symbolRules);
+                            position.protectionOrderListId1 = restore?.orderListId;
+                        }
                     } else {
-                        // Replacement failed — restore protection at original stop level
-                        console.error(chalk.red(`OCO replacement failed for ${coinSymbol}. Restoring original stop.`));
-                        const restore = await this.placeProtectionOco(coinSymbol, position.amount, position.tp1Price, oldStop, symbolRules);
-                        position.protectionOrderListId = restore?.orderListId;
-                        // Do NOT advance slPrice — only advance when replacement succeeds
+                        position.slPrice = newStop;
+                        console.log(chalk.blue(`Trailing Stop moved for ${coinSymbol} to ${newStop.toFixed(4)}`));
                     }
-                } else {
-                    position.slPrice = newStop;
-                    console.log(chalk.blue(`Trailing Stop moved for ${coinSymbol} to ${newStop.toFixed(4)}`));
+                    this.saveState();
                 }
-                this.saveState();
             }
 
             if (emergencyExitFlag) {

@@ -236,7 +236,7 @@ async function startBot(isReconnect = false) {
 
             if (historicalDataStore[symbol]) {
                 historicalDataStore[symbol].push(newCandle);
-                if (historicalDataStore[symbol].length > 100) {
+                if (historicalDataStore[symbol].length > 1000) {
                     historicalDataStore[symbol].shift();
                 }
 

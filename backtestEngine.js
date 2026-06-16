@@ -16,7 +16,7 @@ function calculateTestedDays(data, startIndex, endIndex) {
 function simulateSymbol(data, options = {}) {
     const {
         symbol,
-        startIndex = 300,
+        startIndex = 400,
         endIndex = data.length,
         initialBalance = 1000,
         fixedTradeUSD = null,
@@ -31,7 +31,7 @@ function simulateSymbol(data, options = {}) {
     stats.peakEquity = initialBalance;
 
     for (let i = startIndex; i < endIndex; i++) {
-        const slice = data.slice(Math.max(0, i - 400), i + 1);
+        const slice = data.slice(0, i + 1);
         const candle = slice[slice.length - 1];
 
         if (!position) {

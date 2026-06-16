@@ -72,7 +72,7 @@ function simulateWindow(symbol, data, startIndex, endIndex) {
     let wins = 0;
 
     for (let i = startIndex; i < endIndex; i++) {
-        const slice = data.slice(Math.max(0, i - 100), i + 1);
+        const slice = data.slice(Math.max(0, i - 400), i + 1);
         const currentCandle = slice[slice.length - 1];
         const currentPrice = currentCandle.close;
         const currentHigh = currentCandle.high;
@@ -83,7 +83,7 @@ function simulateWindow(symbol, data, startIndex, endIndex) {
             const result = evaluateTradeV2(coin, slice);
             if (result.signal === 'BUY') {
                 const riskUSD = PORTFOLIO_BALANCE * RISK_PCT;
-                const riskDist = result.atr * 2.0;
+                const riskDist = result.atr * 1.2;
                 
                 let totalSizeCoins = riskUSD / riskDist;
                 const maxTradeUSD = PORTFOLIO_BALANCE * 0.5;
@@ -104,27 +104,79 @@ function simulateWindow(symbol, data, startIndex, endIndex) {
                     remainingSize: totalSizeCoins,
                     risk: riskDist,
                     slPrice: currentPrice - riskDist,
-                    tp1Price: currentPrice + (riskDist * 3),
+                    tp1Price: currentPrice + (result.atr * 1.5),
+                    tp2Price: currentPrice + (result.atr * 3.0),
                     tp1Hit: false,
                     pnlTracker: -fee
                 };
             }
         } else {
             let tradeClosed = false;
-            position.slPrice = Math.max(position.slPrice, currentPrice - (position.atr * 2.5));
+            
+            // Trail at 1 x ATR after TP1
+            if (position.tp1Hit) {
+                position.slPrice = Math.max(position.slPrice, currentPrice - (position.atr * 1.0));
+            }
 
-            if (!position.tp1Hit && currentHigh >= position.tp1Price) {
+            const slTriggered = currentLow <= position.slPrice;
+            const tp1Triggered = !position.tp1Hit && currentHigh >= position.tp1Price;
+            const tp2Triggered = position.tp1Hit && currentHigh >= position.tp2Price;
+
+            if (tp1Triggered && slTriggered) {
+                if (Math.random() < 0.5) {
+                    position.tp1Hit = true;
+                    const sellSize = position.totalSize * 0.5;
+                    const sellVal = sellSize * position.tp1Price;
+                    position.pnlTracker += (sellVal - (sellVal * 0.001)) - (sellSize * position.entryPrice);
+                    position.remainingSize -= sellSize;
+                    position.slPrice = Math.max(position.slPrice, position.entryPrice);
+
+                    if (position.remainingSize > 0.0001 && currentLow <= position.slPrice) {
+                        tradeClosed = true;
+                        const slSellVal = position.remainingSize * position.slPrice;
+                        position.pnlTracker += (slSellVal - (slSellVal * 0.001)) - (position.remainingSize * position.entryPrice);
+                        position.remainingSize = 0;
+                    }
+                } else {
+                    tradeClosed = true;
+                    const sellVal = position.remainingSize * position.slPrice;
+                    position.pnlTracker += (sellVal - (sellVal * 0.001)) - (position.remainingSize * position.entryPrice);
+                    position.remainingSize = 0;
+                }
+            } else if (tp2Triggered && slTriggered) {
+                if (Math.random() < 0.5) {
+                    tradeClosed = true;
+                    const sellVal = position.remainingSize * position.tp2Price;
+                    position.pnlTracker += (sellVal - (sellVal * 0.001)) - (position.remainingSize * position.entryPrice);
+                    position.remainingSize = 0;
+                } else {
+                    tradeClosed = true;
+                    const sellVal = position.remainingSize * position.slPrice;
+                    position.pnlTracker += (sellVal - (sellVal * 0.001)) - (position.remainingSize * position.entryPrice);
+                    position.remainingSize = 0;
+                }
+            } else if (slTriggered) {
+                tradeClosed = true;
+                const sellVal = position.remainingSize * position.slPrice;
+                position.pnlTracker += (sellVal - (sellVal * 0.001)) - (position.remainingSize * position.entryPrice);
+                position.remainingSize = 0;
+            } else if (tp1Triggered) {
                 position.tp1Hit = true;
                 const sellSize = position.totalSize * 0.5;
                 const sellVal = sellSize * position.tp1Price;
                 position.pnlTracker += (sellVal - (sellVal * 0.001)) - (sellSize * position.entryPrice);
                 position.remainingSize -= sellSize;
                 position.slPrice = Math.max(position.slPrice, position.entryPrice);
-            }
 
-            if (currentLow <= position.slPrice) {
+                if (currentHigh >= position.tp2Price) {
+                    tradeClosed = true;
+                    const sellVal2 = position.remainingSize * position.tp2Price;
+                    position.pnlTracker += (sellVal2 - (sellVal2 * 0.001)) - (position.remainingSize * position.entryPrice);
+                    position.remainingSize = 0;
+                }
+            } else if (tp2Triggered) {
                 tradeClosed = true;
-                const sellVal = position.remainingSize * position.slPrice;
+                const sellVal = position.remainingSize * position.tp2Price;
                 position.pnlTracker += (sellVal - (sellVal * 0.001)) - (position.remainingSize * position.entryPrice);
                 position.remainingSize = 0;
             } else {
@@ -185,7 +237,7 @@ async function evaluateCoin(symbol) {
     const data = await fetchHistoricalData(symbol, startTimestamp, endTimestamp);
     if(data.length < 100) return null; // Not enough data
 
-    const warmup = Math.min(300, Math.max(50, Math.floor(data.length * 0.2)));
+    const warmup = 400;
     const result = simulateWalkForward(data, {
         symbol,
         warmupCandles: warmup,

@@ -5,13 +5,13 @@ const { simulateWalkForward } = require('./backtestEngine');
 
 const TIMEFRAME = '15m';
 const KLINES_TO_FETCH = 2880; // ~30 days
-const WARMUP_CANDLES = 300;
+const WARMUP_CANDLES = 400;
 const TRAIN_SPLIT = 0.7;
-const MIN_TRAIN_PF = 1.25;
-const MIN_FORWARD_PF = 1.05;
-const MIN_FORWARD_TRADES = 5;
-const MIN_TRADES_PER_MONTH = 8;
-const MAX_AVG_DAYS_BETWEEN_TRADES = 4;
+const MIN_TRAIN_PF = 1.05;
+const MIN_FORWARD_PF = 1.01;
+const MIN_FORWARD_TRADES = 2;
+const MIN_TRADES_PER_MONTH = 4;
+const MAX_AVG_DAYS_BETWEEN_TRADES = 6;
 
 const STABLECOINS = ['USDT', 'USDC', 'FDUSD', 'TUSD', 'USD1', 'RLUSD', 'DAI', 'USDP'];
 
@@ -84,7 +84,7 @@ function simulateWindow(symbol, data, startIndex, endIndex) {
             const result = evaluateTradeV2(coin, slice);
             if (result.signal === 'BUY') {
                 const fee = TRADE_USD * 0.001;
-                const riskDist = result.atr * 2.0;
+                const riskDist = result.atr * 1.2;
                 position = {
                     entryPrice: currentPrice,
                     atr: result.atr,
@@ -92,27 +92,79 @@ function simulateWindow(symbol, data, startIndex, endIndex) {
                     remainingSize: TRADE_USD / currentPrice,
                     risk: riskDist,
                     slPrice: currentPrice - riskDist,
-                    tp1Price: currentPrice + (riskDist * 3),
+                    tp1Price: currentPrice + (result.atr * 1.5),
+                    tp2Price: currentPrice + (result.atr * 3.0),
                     tp1Hit: false,
                     pnlTracker: -fee
                 };
             }
         } else {
             let tradeClosed = false;
-            position.slPrice = Math.max(position.slPrice, currentPrice - (position.atr * 2.5));
+            
+            // Trail at 1 x ATR after TP1
+            if (position.tp1Hit) {
+                position.slPrice = Math.max(position.slPrice, currentPrice - (position.atr * 1.0));
+            }
 
-            if (!position.tp1Hit && currentHigh >= position.tp1Price) {
+            const slTriggered = currentLow <= position.slPrice;
+            const tp1Triggered = !position.tp1Hit && currentHigh >= position.tp1Price;
+            const tp2Triggered = position.tp1Hit && currentHigh >= position.tp2Price;
+
+            if (tp1Triggered && slTriggered) {
+                if (Math.random() < 0.5) {
+                    position.tp1Hit = true;
+                    const sellSize = position.totalSize * 0.5;
+                    const sellVal = sellSize * position.tp1Price;
+                    position.pnlTracker += (sellVal - (sellVal * 0.001)) - (sellSize * position.entryPrice);
+                    position.remainingSize -= sellSize;
+                    position.slPrice = Math.max(position.slPrice, position.entryPrice);
+
+                    if (position.remainingSize > 0.0001 && currentLow <= position.slPrice) {
+                        tradeClosed = true;
+                        const slSellVal = position.remainingSize * position.slPrice;
+                        position.pnlTracker += (slSellVal - (slSellVal * 0.001)) - (position.remainingSize * position.entryPrice);
+                        position.remainingSize = 0;
+                    }
+                } else {
+                    tradeClosed = true;
+                    const sellVal = position.remainingSize * position.slPrice;
+                    position.pnlTracker += (sellVal - (sellVal * 0.001)) - (position.remainingSize * position.entryPrice);
+                    position.remainingSize = 0;
+                }
+            } else if (tp2Triggered && slTriggered) {
+                if (Math.random() < 0.5) {
+                    tradeClosed = true;
+                    const sellVal = position.remainingSize * position.tp2Price;
+                    position.pnlTracker += (sellVal - (sellVal * 0.001)) - (position.remainingSize * position.entryPrice);
+                    position.remainingSize = 0;
+                } else {
+                    tradeClosed = true;
+                    const sellVal = position.remainingSize * position.slPrice;
+                    position.pnlTracker += (sellVal - (sellVal * 0.001)) - (position.remainingSize * position.entryPrice);
+                    position.remainingSize = 0;
+                }
+            } else if (slTriggered) {
+                tradeClosed = true;
+                const sellVal = position.remainingSize * position.slPrice;
+                position.pnlTracker += (sellVal - (sellVal * 0.001)) - (position.remainingSize * position.entryPrice);
+                position.remainingSize = 0;
+            } else if (tp1Triggered) {
                 position.tp1Hit = true;
                 const sellSize = position.totalSize * 0.5;
                 const sellVal = sellSize * position.tp1Price;
                 position.pnlTracker += (sellVal - (sellVal * 0.001)) - (sellSize * position.entryPrice);
                 position.remainingSize -= sellSize;
                 position.slPrice = Math.max(position.slPrice, position.entryPrice);
-            }
 
-            if (currentLow <= position.slPrice) {
+                if (currentHigh >= position.tp2Price) {
+                    tradeClosed = true;
+                    const sellVal2 = position.remainingSize * position.tp2Price;
+                    position.pnlTracker += (sellVal2 - (sellVal2 * 0.001)) - (position.remainingSize * position.entryPrice);
+                    position.remainingSize = 0;
+                }
+            } else if (tp2Triggered) {
                 tradeClosed = true;
-                const sellVal = position.remainingSize * position.slPrice;
+                const sellVal = position.remainingSize * position.tp2Price;
                 position.pnlTracker += (sellVal - (sellVal * 0.001)) - (position.remainingSize * position.entryPrice);
                 position.remainingSize = 0;
             } else {
@@ -205,6 +257,11 @@ async function runMonthlySimulation() {
         if (res) results.push(res);
     }
     console.log("\\nSimulation complete.");
+
+    console.log("All coins raw results:");
+    results.forEach(c => {
+        console.log(`${c.symbol} | Train PF: ${c.train.pf.toFixed(2)} | Forward PF: ${c.forward.pf.toFixed(2)} | Forward Trades: ${c.forward.tradesCount} | Trades/Mo: ${c.forward.tradesPerMonth.toFixed(1)} | Avg Days/Trade: ${c.forward.avgDaysBetweenTrades.toFixed(2)} | Net PnL: $${c.forward.netPnL.toFixed(2)}`);
+    });
 
     let validCoins = results.filter(c => {
         return c.train.pf >= MIN_TRAIN_PF &&

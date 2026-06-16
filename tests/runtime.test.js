@@ -63,14 +63,27 @@ function testSimulatedFillCosts() {
     });
 
     assert.ok(position.entryPrice > 100);
-    const update = updateSimulatedPosition(position, {
+    // First candle hits TP1, sells 50%
+    const update1 = updateSimulatedPosition(position, {
         close: position.tp1Price,
         high: position.tp1Price * 1.01,
         low: position.entryPrice,
         timestamp: Date.now()
     });
 
-    assert.strictEqual(update.closed, true);
+    assert.strictEqual(update1.closed, false); // Not closed yet, 50% remains as runner
+    assert.ok(position.tp1Hit);
+    assert.strictEqual(position.slPrice, position.entryPrice); // Stop moved to breakeven
+
+    // Second candle hits TP2, closes position
+    const update2 = updateSimulatedPosition(position, {
+        close: position.tp2Price,
+        high: position.tp2Price * 1.01,
+        low: position.entryPrice,
+        timestamp: Date.now()
+    });
+
+    assert.strictEqual(update2.closed, true);
     assert.ok(position.feeTracker > position.entryFee);
 }
 
