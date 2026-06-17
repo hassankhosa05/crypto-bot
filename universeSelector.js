@@ -11,12 +11,12 @@ const KLINES_TO_FETCH = 2500;
 const WARMUP_CANDLES = 400;
 
 // Minimum thresholds applied to the validate window (used for selection)
-const MIN_TRAIN_PF     = 1.25;
-const MIN_VALIDATE_PF  = 1.05;
+const MIN_TRAIN_PF     = 1.05;
+const MIN_VALIDATE_PF  = 1.01;
 const MIN_HOLDOUT_PF   = 0.90; // holdout must not be a disaster
-const MIN_FORWARD_TRADES = 3;
-const MIN_TRADES_PER_MONTH = 8;
-const MAX_AVG_DAYS_BETWEEN_TRADES = 4;
+const MIN_FORWARD_TRADES = 2;
+const MIN_TRADES_PER_MONTH = 4;
+const MAX_AVG_DAYS_BETWEEN_TRADES = 6;
 
 // Maximum allowed PF decay from train to validate — penalises overfitting
 const MAX_PF_DECAY_RATIO = 0.55; // validate.pf must be >= train.pf * (1 - 0.55)
@@ -72,7 +72,7 @@ async function fetchHistoricalData(symbol) {
         } catch (e) {
             break;
         }
-        await new Promise(r => setTimeout(r, 50));
+        await new Promise(r => setTimeout(r, 1000));
     }
     if (klins.length > KLINES_TO_FETCH) klins = klins.slice(klins.length - KLINES_TO_FETCH);
     return klins.map(d => ({

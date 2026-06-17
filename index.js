@@ -120,6 +120,7 @@ async function startBot(isReconnect = false) {
         } catch (selectorErr) {
             console.log(chalk.yellow('Universe selector failed. Using fallback universe.'));
             activeUniverse = { ...FALLBACK_UNIVERSE, updatedAt: new Date().toISOString() };
+            require('fs').writeFileSync('./active_universe.json', JSON.stringify(activeUniverse, null, 2));
         }
     }
 
@@ -154,7 +155,7 @@ async function startBot(isReconnect = false) {
         console.log(chalk.yellow(`Warming up ${coinsNeedingWarmup.length} coin(s)...`));
         for (const coin of coinsNeedingWarmup) {
             currentPrices[coin.symbol] = coin.current_price;
-            await delay(2000);
+            await delay(5000);
             const historicalData = await fetchHistoricalData(coin.id);
             if (historicalData) {
                 historicalDataStore[coin.symbol] = historicalData;
