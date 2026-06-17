@@ -72,7 +72,7 @@ async function fetchHistoricalData(symbol) {
         } catch (e) {
             break;
         }
-        await new Promise(r => setTimeout(r, 1000));
+        await new Promise(r => setTimeout(r, 2000));
     }
     if (klins.length > KLINES_TO_FETCH) klins = klins.slice(klins.length - KLINES_TO_FETCH);
     return klins.map(d => ({
@@ -137,7 +137,7 @@ async function runSelector() {
         process.stdout.write(sym + " ");
         const res = await evaluateCoin(sym, regime);
         if (res) results.push(res);
-        await new Promise(r => setTimeout(r, 5000));
+        await new Promise(r => setTimeout(r, 10000));
     }
     console.log("\nEvaluation complete.");
 

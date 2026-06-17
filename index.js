@@ -262,10 +262,10 @@ async function startBot(isReconnect = false) {
                 if (decision.signal === 'NO TRADE') {
                     const logObj = { symbol: symbol, failedReason: decision.failedReason || decision.reason };
                     if (decision.meta) Object.assign(logObj, decision.meta);
-                    require('fs').appendFileSync('./trade_evaluations.jsonl', JSON.stringify(logObj) + '\n');
+                    require('fs').appendFile('./trade_evaluations.jsonl', JSON.stringify(logObj) + '\n', (err) => { if(err) console.error(err); });
                 } else if (decision.signal === 'BUY') {
                     const logObj = { symbol: symbol, action: 'BUY', score: decision.score, reason: decision.reason };
-                    require('fs').appendFileSync('./trade_evaluations.jsonl', JSON.stringify(logObj) + '\n');
+                    require('fs').appendFile('./trade_evaluations.jsonl', JSON.stringify(logObj) + '\n', (err) => { if(err) console.error(err); });
                     await trader.executeTrade(symbol, 'BUY', currentPrice, 'Confluence Engine', decision.reason, decision.atr);
                 }
             }
