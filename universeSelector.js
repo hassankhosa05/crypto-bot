@@ -7,8 +7,8 @@ const { simulateThreeWay } = require('./backtestEngine');
 
 const TIMEFRAME = '15m';
 // ~15 days of 15m candles — gives a meaningful holdout window after the 3-way split
-const KLINES_TO_FETCH = 1500;
-const WARMUP_CANDLES = 300;
+const KLINES_TO_FETCH = 2500;
+const WARMUP_CANDLES = 400;
 
 // Minimum thresholds applied to the validate window (used for selection)
 const MIN_TRAIN_PF     = 1.05;

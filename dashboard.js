@@ -13,7 +13,7 @@ function startDashboard(port = process.env.PORT || 3000, trader) {
     const app = express();
     app.use(express.static(path.join(__dirname, 'public')));
 
-    app.get('/ping', (req, res) => res.send('OK'));
+    // app.get('/ping', (req, res) => res.send('OK'));
 
     app.get('/api/state', (req, res) => {
         if (!trader) {
