@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crypto Scalping Paper Trading Bot</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Crypto Scalper Bot</h1>
+            <div class="status">
+                <span class="indicator pulse"></span>
+                <span>Live Trading</span>
+                <span class="last-update" id="lastUpdate">Loading…</span>
+            </div>
+        </header>
+
+        <div class="dashboard-grid">
+            <section class="card summary">
+                <h2>Portfolio Summary</h2>
+                <div class="summary-grid">
+                    <div class="stat">
+                        <span class="label">Initial Balance</span>
+                        <span class="value" id="initialBalance">$0.00</span>
+                    </div>
+                    <div class="stat">
+                        <span class="label">Available Cash</span>
+                        <span class="value" id="balance">$0.00</span>
+                    </div>
+                    <div class="stat">
+                        <span class="label">Invested</span>
+                        <span class="value" id="invested">$0.00</span>
+                    </div>
+                    <div class="stat">
+                        <span class="label">Total Value</span>
+                        <span class="value" id="totalValue">$0.00</span>
+                    </div>
+                    <div class="stat">
+                        <span class="label">Total P/L</span>
+                        <span class="value" id="totalPnl">$0.00 (0.00%)</span>
+                    </div>
+                </div>
+            </section>
+
+            <section class="card positions">
+                <h2>Open Positions</h2>
+                <div class="table-container">
+                    <table id="positionsTable">
+                        <thead>
+                            <tr>
+                                <th>Coin</th>
+                                <th>Amount</th>
+                                <th>Entry</th>
+                                <th>Current</th>
+                                <th>% Move</th>
+                                <th>Unrealized P/L</th>
+                                <th>Stop Loss</th>
+                                <th>Take Profit</th>
+                                <th>Strategy</th>
+                                <th>Time</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section class="card trades">
+                <h2>Recent Trades</h2>
+                <div class="table-container">
+                    <table id="tradesTable">
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>Action</th>
+                                <th>Coin</th>
+                                <th>Entry</th>
+                                <th>Exit</th>
+                                <th>Amount</th>
+                                <th>Strategy</th>
+                                <th>Reason</th>
+                                <th>P/L</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </section>
+        </div>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+{
+  "balance": 300,
+  "initialBalance": 300,
+  "positions": {},
+  "tradeHistory": [],
+  "dailyLosses": 0,
+  "dailyDrawdownUSD": 0,
+  "lastLossDate": "Mon May 25 2026",
+  "currentPrices": {}
+}
