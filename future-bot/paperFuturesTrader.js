@@ -64,13 +64,15 @@ class PaperFuturesTrader {
     async runCycle() {
         console.log(`\n--- Paper Futures Trader Cycle [${new Date().toISOString()}] ---`);
         try {
-            if (!this.checkDailyLimits()) return;
-
-            const regime = await checkMarketRegime();
-            console.log("Global Market Regime:", regime);
+            const limitsOk = this.checkDailyLimits();
 
             await this.managePositions();
-            await this.scanForEntries(regime);
+
+            if (limitsOk) {
+                const regime = await checkMarketRegime();
+                console.log("Global Market Regime:", regime);
+                await this.scanForEntries(regime);
+            }
         } catch (error) {
             console.error("Paper Cycle error:", error.message);
         }

@@ -93,17 +93,17 @@ class LiveFuturesTrader {
             await this.initExchangeInfo();
             
             const currentBalance = await api.getUSDTBalance();
-            if (!this.checkDailyLimits(currentBalance)) {
-                return;
-            }
-
-            const regime = await checkMarketRegime();
-            console.log("Global Market Regime:", regime);
+            const limitsOk = this.checkDailyLimits(currentBalance);
 
             await this.managePositions(currentBalance);
 
-            if (regime !== 'SIDEWAYS') {
-                await this.scanForEntries(regime, currentBalance);
+            if (limitsOk) {
+                const regime = await checkMarketRegime();
+                console.log("Global Market Regime:", regime);
+
+                if (regime !== 'SIDEWAYS') {
+                    await this.scanForEntries(regime, currentBalance);
+                }
             }
         } catch (error) {
             console.error("Cycle error:", error.message);
