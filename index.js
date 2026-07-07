@@ -26,7 +26,7 @@ if (process.env.TRADE_MODE === 'LIVE') {
     syncServerTime().catch(() => {});
     console.log(chalk.red.bold("!!! WARNING: BOT IS RUNNING IN LIVE TRADING MODE WITH REAL MONEY !!!"));
 } else {
-    trader = new PaperTrader(300);
+    trader = new PaperTrader(500);
     console.log(chalk.green("Bot is running in PAPER TRADING mode."));
 }
 
