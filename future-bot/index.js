@@ -1,4 +1,6 @@
 require('dotenv').config();
+const fs = require('fs');
+const path = require('path');
 const { startDashboard } = require('./dashboard');
 const { LiveFuturesTrader } = require('./liveTrader');
 const { PaperFuturesTrader } = require('./paperFuturesTrader');
@@ -10,6 +12,14 @@ if (process.env.TRADE_MODE === 'LIVE') {
 } else {
     console.log("Running in PAPER TRADING MODE with $1000 initial balance");
     trader = new PaperFuturesTrader(1000);
+}
+
+// Run universe selector on startup if active_universe.json doesn't exist
+const universePath = path.join(__dirname, 'active_universe.json');
+if (!fs.existsSync(universePath)) {
+    console.log("No active_universe.json found for Futures. Running selector on startup...");
+    const { runSelector } = require('./universeSelector');
+    runSelector().catch(err => console.error("Initial universe selection failed:", err.message));
 }
 
 // Run every minute
