@@ -129,7 +129,11 @@ async function startBot(isReconnect = false) {
         return;
     }
 
-    const coins = Object.keys(activeUniverse.coins).map(sym => ({ symbol: sym, id: sym }));
+    const coins = Object.keys(activeUniverse.coins).map(sym => ({
+        symbol: sym,
+        id: sym,
+        tier: activeUniverse.coins[sym].tier
+    }));
     const currentPrices = {};
     const streamNames = [];
 

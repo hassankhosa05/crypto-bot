@@ -11,7 +11,7 @@ class PaperFuturesTrader {
         this.initialBalance = initialBalance;
         this.state = this.loadState();
         this.maxPositions = 2;
-        this.riskPerTrade = 0.01;
+        this.riskPerTrade = 0.003;
         this.leverage = 5;
     }
 

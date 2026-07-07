@@ -17,7 +17,7 @@ class LiveFuturesTrader {
     constructor() {
         this.state = this.loadState();
         this.maxPositions = 2;
-        this.riskPerTrade = 0.01;
+        this.riskPerTrade = 0.003;
         this.leverage = 5;
         this.exchangeInfoCache = null;
     }
@@ -148,39 +148,48 @@ class LiveFuturesTrader {
                 continue;
             }
 
-            // Check TP1
-            if (pState.stage === 'INITIAL') {
-                const hitTP1 = isLong ? (currentPrice >= pState.tp1) : (currentPrice <= pState.tp1);
-                if (hitTP1) {
-                    console.log(`TP1 HIT for ${sym}. Closing 50%, moving SL to breakeven.`);
-                    const closeQty = formatStep(parseFloat(position.positionAmt) * 0.5, this.exchangeInfoCache[sym].stepSize);
-                    const closeSide = isLong ? 'SELL' : 'BUY';
-                    await api.placeMarketOrder(sym, closeSide, Math.abs(closeQty));
-                    
-                    // Move SL
-                    await api.cancelAllOpenOrders(sym);
-                    const bePrice = formatStep(pState.entryPrice, this.exchangeInfoCache[sym].tickSize);
+            const currentQty = Math.abs(parseFloat(position.positionAmt));
+            const closeSide = isLong ? 'SELL' : 'BUY';
+
+            // Check TP1 hit (position size reduced to 50% or less of originalQty)
+            if (pState.stage === 'INITIAL' && currentQty <= (pState.originalQty * 0.55)) {
+                console.log(`TP1 HIT detected for ${sym} (current quantity ${currentQty} <= 50% of ${pState.originalQty}). Moving SL to breakeven.`);
+                
+                await api.cancelAllOpenOrders(sym);
+                
+                const bePrice = formatStep(pState.entryPrice, this.exchangeInfoCache[sym].tickSize);
+                
+                // If it hit both TP1 and TP2 in a fast spike (position size is 20% or less of originalQty)
+                if (currentQty <= (pState.originalQty * 0.25)) {
+                    console.log(`TP2 also HIT detected for ${sym}. Transitioning to TP2 Runner stage.`);
+                    await api.placeConditionalOrder(sym, closeSide, 'STOP_MARKET', 0, bePrice, true);
+                    pState.stage = 'TP2';
+                } else {
                     await api.placeConditionalOrder(sym, closeSide, 'STOP_MARKET', 0, bePrice, true);
                     
+                    const tp2Qty = formatStep(pState.originalQty * 0.3, this.exchangeInfoCache[sym].stepSize);
+                    const tp2Price = formatStep(pState.tp2, this.exchangeInfoCache[sym].tickSize);
+                    if (parseFloat(tp2Qty) > 0) {
+                        await api.placeLimitOrder(sym, closeSide, tp2Qty, tp2Price, true);
+                    }
                     pState.stage = 'TP1';
-                    this.saveState();
-                    continue;
                 }
+                
+                this.saveState();
+                continue;
             }
 
-            // Check TP2
-            if (pState.stage === 'TP1') {
-                const hitTP2 = isLong ? (currentPrice >= pState.tp2) : (currentPrice <= pState.tp2);
-                if (hitTP2) {
-                    console.log(`TP2 HIT for ${sym}. Closing 30% of original.`);
-                    const closeQty = formatStep(pState.originalQty * 0.3, this.exchangeInfoCache[sym].stepSize);
-                    const closeSide = isLong ? 'SELL' : 'BUY';
-                    await api.placeMarketOrder(sym, closeSide, Math.abs(closeQty));
-                    
-                    pState.stage = 'TP2'; // Runner mode
-                    this.saveState();
-                    continue;
-                }
+            // Check TP2 hit (position size reduced to 20% or less of originalQty)
+            if (pState.stage === 'TP1' && currentQty <= (pState.originalQty * 0.25)) {
+                console.log(`TP2 HIT detected for ${sym} (current quantity ${currentQty} <= 20% of ${pState.originalQty}). Entering TP2 Runner stage.`);
+                
+                await api.cancelAllOpenOrders(sym);
+                const bePrice = formatStep(pState.entryPrice, this.exchangeInfoCache[sym].tickSize);
+                await api.placeConditionalOrder(sym, closeSide, 'STOP_MARKET', 0, bePrice, true);
+                
+                pState.stage = 'TP2';
+                this.saveState();
+                continue;
             }
 
             // Check Strategy Exit
@@ -255,7 +264,22 @@ class LiveFuturesTrader {
 
             const slSide = side === 'BUY' ? 'SELL' : 'BUY';
             const slPrice = formatStep(setup.stopLoss, info.tickSize);
+            // Place full Stop Loss on exchange
             await api.placeConditionalOrder(setup.symbol, slSide, 'STOP_MARKET', 0, slPrice, true);
+
+            // Place limit TP1 on exchange (50% of position size)
+            const tp1Qty = formatStep(parseFloat(qty) * 0.5, info.stepSize);
+            const tp1Price = formatStep(setup.tp1, info.tickSize);
+            if (parseFloat(tp1Qty) > 0) {
+                await api.placeLimitOrder(setup.symbol, slSide, tp1Qty, tp1Price, true);
+            }
+
+            // Place limit TP2 on exchange (30% of position size)
+            const tp2Qty = formatStep(parseFloat(qty) * 0.3, info.stepSize);
+            const tp2Price = formatStep(setup.tp2, info.tickSize);
+            if (parseFloat(tp2Qty) > 0) {
+                await api.placeLimitOrder(setup.symbol, slSide, tp2Qty, tp2Price, true);
+            }
 
             this.state.positions[setup.symbol] = {
                 direction: setup.signal,

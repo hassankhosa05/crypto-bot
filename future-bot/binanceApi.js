@@ -173,6 +173,19 @@ async function getOrderStatus(symbol, orderId) {
     return response.data;
 }
 
+async function placeLimitOrder(symbol, side, quantity, price, reduceOnly = true) {
+    const timestamp = getTimestamp();
+    const newClientOrderId = clientOrderId(symbol);
+    const queryString = `symbol=${symbol}&side=${side}&type=LIMIT&quantity=${quantity}&price=${price}&reduceOnly=${reduceOnly}&timeInForce=GTC&newClientOrderId=${newClientOrderId}&timestamp=${timestamp}&recvWindow=${RECV_WINDOW}`;
+    const signature = getSignature(queryString);
+    const response = await axios.post(
+        `${BASE_URL}/fapi/v1/order?${queryString}&signature=${signature}`,
+        null,
+        { headers: authHeaders, timeout: REQUEST_TIMEOUT }
+    );
+    return response.data;
+}
+
 module.exports = {
     syncServerTime,
     getAccountInfo,
@@ -183,6 +196,7 @@ module.exports = {
     getPremiumIndex,
     getBookTickers,
     placeMarketOrder,
+    placeLimitOrder,
     placeConditionalOrder,
     cancelOrder,
     cancelAllOpenOrders,

@@ -201,7 +201,10 @@ function evaluateTradeV2(coin, historicalData, regime = 'TRENDING') {
         if (breakConfirm) { confirmations++; reasons.push(`Breakout ${last3High.toFixed(4)}`); }
         if (momConfirm) { confirmations++; reasons.push('Bullish momentum'); }
 
-        const requiredConfirmations = regime === 'CHOPPY' ? 2 : 1;
+        let requiredConfirmations = 1;
+        if (regime === 'CHOPPY') {
+            requiredConfirmations = (coin && coin.tier === 1) ? 1 : 2;
+        }
         if (confirmations >= requiredConfirmations) {
             return {
                 signal: 'BUY',
