@@ -20,7 +20,7 @@ const TRADING_CONFIG = {
     takeProfitFraction: 0.5,
     trailingAtrMultiplier: 1.0,
     stopLimitBufferPct: 0.001,
-    dailyMaxDrawdownPct: 0.05,
+    dailyMaxDrawdownPct: 0.03,
     dailyMaxLosses: 3,
     maxConcurrentPositions: 5
 };

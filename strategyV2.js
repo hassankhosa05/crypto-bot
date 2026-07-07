@@ -86,12 +86,13 @@ function evaluateTradeV2(coin, historicalData, regime = 'TRENDING') {
     // LAYER 1 — LIQUIDITY & VOLATILITY (15m Timeframe)
     // ─────────────────────────────────────────────────────────────────────────
     
-    // 1. Volume filter (RVOL >= 0.9)
+    // 1. Volume filter
     const currentVolume = volumes[volumes.length - 1];
     const avgVol20 = volumes.slice(-20).reduce((a, b) => a + b, 0) / 20;
     const rvol = avgVol20 > 0 ? currentVolume / avgVol20 : 0;
-    if (rvol < 0.9) {
-        return { signal: 'NO TRADE', score: 0, failedReason: 'RVOL', atr: 0, meta: { rvol: parseFloat(rvol.toFixed(2)), required: 0.9 } };
+    const requiredRVOL = regime === 'CHOPPY' ? 1.3 : 0.9;
+    if (rvol < requiredRVOL) {
+        return { signal: 'NO TRADE', score: 0, failedReason: 'RVOL', atr: 0, meta: { rvol: parseFloat(rvol.toFixed(2)), required: requiredRVOL } };
     }
 
     // 2. Volatility filter (ATR% >= 0.4%)
@@ -149,12 +150,13 @@ function evaluateTradeV2(coin, historicalData, regime = 'TRENDING') {
         return { signal: 'NO TRADE', score: 0, failedReason: 'Neutral bias', atr: currentATR, meta: { distance: parseFloat(distance.toFixed(4)), required: 0.0015 } };
     }
 
-    // 2. Trend Strength Filter: ADX(14) >= 14 (soft filter on 15m)
+    // 2. Trend Strength Filter (stricter in CHOPPY)
     const adxCalc = ADX.calculate({ high: highs, low: lows, close: closes, period: 14 });
     const currentADXObj = adxCalc[adxCalc.length - 1];
     const currentADX = currentADXObj ? currentADXObj.adx : 0;
-    if (currentADX < 14) {
-        return { signal: 'NO TRADE', score: 0, failedReason: 'ADX < 14', atr: currentATR, meta: { adx: parseFloat(currentADX.toFixed(2)), required: 14 } };
+    const requiredADX = regime === 'CHOPPY' ? 25 : 14;
+    if (currentADX < requiredADX) {
+        return { signal: 'NO TRADE', score: 0, failedReason: `ADX < ${requiredADX}`, atr: currentATR, meta: { adx: parseFloat(currentADX.toFixed(2)), required: requiredADX } };
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -184,7 +186,7 @@ function evaluateTradeV2(coin, historicalData, regime = 'TRENDING') {
             return { signal: 'NO TRADE', score: 0, failedReason: 'Not in pullback zone', atr: currentATR, meta: { price: currentPrice, ema21: currentEMA21, vwap } };
         }
 
-        // 2. Confirmations (ONE required):
+        // 2. Confirmations
         // a. RSI > 45 and rising
         const rsiConfirm = currentRSI > 45 && currentRSI > prevRSI;
         // b. Bullish candle break of last 3 candles
@@ -193,16 +195,18 @@ function evaluateTradeV2(coin, historicalData, regime = 'TRENDING') {
         // c. Momentum candle > 0.2%
         const momConfirm = (currentPrice > currentOpen) && ((currentPrice - currentOpen) / currentOpen > 0.002);
 
-        if (rsiConfirm || breakConfirm || momConfirm) {
-            const reasons = [];
-            if (rsiConfirm) reasons.push(`RSI ${currentRSI.toFixed(1)} rising`);
-            if (breakConfirm) reasons.push(`Breakout ${last3High.toFixed(4)}`);
-            if (momConfirm) reasons.push('Bullish momentum');
+        let confirmations = 0;
+        const reasons = [];
+        if (rsiConfirm) { confirmations++; reasons.push(`RSI ${currentRSI.toFixed(1)} rising`); }
+        if (breakConfirm) { confirmations++; reasons.push(`Breakout ${last3High.toFixed(4)}`); }
+        if (momConfirm) { confirmations++; reasons.push('Bullish momentum'); }
 
+        const requiredConfirmations = regime === 'CHOPPY' ? 2 : 1;
+        if (confirmations >= requiredConfirmations) {
             return {
                 signal: 'BUY',
-                score: 3,
-                reason: `3-Layer LONG Entry Confluence: ${reasons.join(', ')}`,
+                score: 3 + confirmations,
+                reason: `3-Layer LONG Entry Confluence (${confirmations}/${requiredConfirmations}): ${reasons.join(', ')}`,
                 atr: currentATR
             };
         }
