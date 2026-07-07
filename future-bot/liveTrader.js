@@ -17,7 +17,7 @@ class LiveFuturesTrader {
     constructor() {
         this.state = this.loadState();
         this.maxPositions = 2;
-        this.riskPerTrade = 0.003;
+        this.riskPerTrade = 0.01;
         this.leverage = 5;
         this.exchangeInfoCache = null;
     }
@@ -229,6 +229,15 @@ class LiveFuturesTrader {
             
             if (tradeRes.signal !== 'NONE') {
                 validSetups.push({ symbol: sym, ...tradeRes });
+            } else {
+                const logObj = {
+                    timestamp: new Date().toISOString(),
+                    symbol: sym,
+                    signal: 'NONE',
+                    failedReason: tradeRes.reason
+                };
+                const logPath = path.join(__dirname, 'trade_evaluations.jsonl');
+                fs.appendFile(logPath, JSON.stringify(logObj) + '\n', (err) => { if (err) console.error(err); });
             }
         }
 

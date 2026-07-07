@@ -7,11 +7,17 @@ const { PaperFuturesTrader } = require('./paperFuturesTrader');
 
 let trader;
 if (process.env.TRADE_MODE === 'LIVE') {
-    console.log("!!! RUNNING IN LIVE TRADING MODE (REAL MONEY) !!!");
+    console.log("!!! RUNNING IN LIVE TRADING MODE (REAL MONEY, 1% RISK) !!!");
     trader = new LiveFuturesTrader();
+    trader.riskPerTrade = 0.01;
+} else if (process.env.TRADE_MODE === 'LIVE-SMALL') {
+    console.log("!!! RUNNING IN LIVE-SMALL TRADING MODE (REAL MONEY, 0.3% RISK) !!!");
+    trader = new LiveFuturesTrader();
+    trader.riskPerTrade = 0.003;
 } else {
-    console.log("Running in PAPER TRADING MODE with $1000 initial balance");
+    console.log("Running in PAPER TRADING MODE with $1000 initial balance (0.3% RISK)");
     trader = new PaperFuturesTrader(1000);
+    trader.riskPerTrade = 0.003;
 }
 
 // Run universe selector on startup if active_universe.json doesn't exist
