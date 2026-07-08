@@ -18,7 +18,9 @@ class PaperFuturesTrader {
     loadState() {
         try {
             if (fs.existsSync(STATE_FILE)) {
-                return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+                const loaded = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+                if (!loaded.lastEntryCandles) loaded.lastEntryCandles = {};
+                return loaded;
             }
         } catch (e) { }
         return {
@@ -29,7 +31,8 @@ class PaperFuturesTrader {
             dailyLosses: 0,
             dailyDrawdownPct: 0,
             lastTradeDate: new Date().toISOString().split('T')[0],
-            accountBalanceStartOfDay: this.initialBalance
+            accountBalanceStartOfDay: this.initialBalance,
+            lastEntryCandles: {}
         };
     }
 
@@ -237,6 +240,12 @@ class PaperFuturesTrader {
         for (const sym of Object.keys(universe.coins)) {
             if (this.state.positions[sym]) continue;
             
+            // One entry per 15m candle guard
+            const currentCandleStart = Math.floor(Date.now() / (15 * 60 * 1000)) * (15 * 60 * 1000);
+            if (this.state.lastEntryCandles && this.state.lastEntryCandles[sym] === currentCandleStart) {
+                continue;
+            }
+
             const metrics = universe.coins[sym];
             const tradeRes = await evaluateTrade(sym, regime, metrics.fundingRate);
             
@@ -264,6 +273,10 @@ class PaperFuturesTrader {
     }
 
     executeTrade(setup) {
+        const currentCandleStart = Math.floor(Date.now() / (15 * 60 * 1000)) * (15 * 60 * 1000);
+        if (!this.state.lastEntryCandles) this.state.lastEntryCandles = {};
+        this.state.lastEntryCandles[setup.symbol] = currentCandleStart;
+
         const riskAmount = this.state.balance * this.riskPerTrade;
         const distanceToSl = Math.abs(setup.price - setup.stopLoss);
         let positionSize = riskAmount / distanceToSl;

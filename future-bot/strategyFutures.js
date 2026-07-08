@@ -159,32 +159,9 @@ async function evaluateTrade(symbol, marketRegime, fundingRate) {
 }
 
 async function checkExitCriteria(symbol, direction) {
-    try {
-        const klines15m = await getKlines(symbol, '15m', 50);
-        if (klines15m.length < 30) return false;
-
-        const closes = klines15m.map(k => k.close);
-        const ema9 = EMA.calculate({ period: 9, values: closes });
-        const ema21 = EMA.calculate({ period: 21, values: closes });
-        
-        const curEma9 = ema9[ema9.length - 1];
-        const curEma21 = ema21[ema21.length - 1];
-        
-        // Simple MACD approximation for exit (EMA12 vs EMA26)
-        const ema12 = EMA.calculate({ period: 12, values: closes });
-        const ema26 = EMA.calculate({ period: 26, values: closes });
-        const curMacd = ema12[ema12.length-1] - ema26[ema26.length-1];
-
-        if (direction === 'LONG') {
-            if (curEma9 < curEma21 && curMacd < 0) return { exit: true, reason: 'EMA9 cross down + MACD bearish' };
-        } else {
-            if (curEma9 > curEma21 && curMacd > 0) return { exit: true, reason: 'EMA9 cross up + MACD bullish' };
-        }
-
-        return { exit: false };
-    } catch (e) {
-        return { exit: false };
-    }
+    // Disabled: The previous emergency exit logic was causing premature exits on pullbacks.
+    // We now rely solely on exchange-native ATR SL/TP targets and the 3-hour time stop.
+    return { exit: false };
 }
 
 module.exports = { evaluateTrade, checkExitCriteria };
