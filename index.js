@@ -129,10 +129,16 @@ async function startBot(isReconnect = false) {
         return;
     }
 
-    const coins = Object.keys(activeUniverse.coins).map(sym => ({
+    let coinsToUse = activeUniverse.coins;
+    if (activeUniverse.regime === 'CHOPPY') {
+        console.log(chalk.yellow("Global Regime is CHOPPY. Restricting trade universe to pre-selected safe coins."));
+        coinsToUse = FALLBACK_UNIVERSE.coins;
+    }
+
+    const coins = Object.keys(coinsToUse).map(sym => ({
         symbol: sym,
         id: sym,
-        tier: activeUniverse.coins[sym].tier
+        tier: coinsToUse[sym].tier
     }));
     const currentPrices = {};
     const streamNames = [];
