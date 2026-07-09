@@ -78,12 +78,8 @@ class LiveFuturesTrader {
 
         const drawdown = (this.state.accountBalanceStartOfDay - currentBalance) / this.state.accountBalanceStartOfDay;
         
-        if (this.state.dailyLosses >= 3) {
-            console.log("Daily Limit: 3 Consecutive Losses.");
-            return false;
-        }
         if (drawdown >= 0.03) {
-            console.log(`Daily Limit: Drawdown ${(drawdown*100).toFixed(2)}%`);
+            console.log(`Daily Limit: Drawdown ${(drawdown*100).toFixed(2)}% >= 3%. Pausing new entries for today.`);
             return false;
         }
         return true;
