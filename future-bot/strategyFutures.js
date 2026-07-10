@@ -131,12 +131,17 @@ async function evaluateTrade(symbol, marketRegime, fundingRate) {
         if (confirmations < reqConfirmations) {
             return { signal: 'NONE', reason: `Need ${reqConfirmations} confirmations, got ${confirmations}` };
         }
-        
-        // Final calculation
-        const stopDistance = 1.2 * curAtr_15m;
-        
-        // Calculate confluence score for correlation ranking
-        let confluenceScore = curAdx_1H; // Base score on ADX
+
+        // ── Risk / Reward Calculation ───────────────────────────────────
+        // SL  = 1.2 × ATR  (tight enough to control loss)
+        // TP1 = 2.0 × ATR  (1.67:1 R:R — profitable even at 40% win rate)
+        // TP2 = 3.5 × ATR  (2.9:1 R:R — captures the real trend run)
+        const slDistance  = 1.2 * curAtr_15m;
+        const tp1Distance = 2.0 * curAtr_15m;
+        const tp2Distance = 3.5 * curAtr_15m;
+
+        // Calculate confluence score for ranking
+        let confluenceScore = curAdx_1H;
         if (breakHigh || breakLow) confluenceScore += 5;
         if (strongBullish || strongBearish) confluenceScore += 5;
 
@@ -144,9 +149,9 @@ async function evaluateTrade(symbol, marketRegime, fundingRate) {
             signal: trend === 'BULLISH' ? 'LONG' : 'SHORT',
             reason: `Trend: ${trend}, Confirmed by Pullback & Momentum`,
             price: last15m.close,
-            stopLoss: trend === 'BULLISH' ? last15m.close - stopDistance : last15m.close + stopDistance,
-            tp1: trend === 'BULLISH' ? last15m.close + stopDistance : last15m.close - stopDistance,
-            tp2: trend === 'BULLISH' ? last15m.close + (2 * stopDistance) : last15m.close - (2 * stopDistance),
+            stopLoss: trend === 'BULLISH' ? last15m.close - slDistance  : last15m.close + slDistance,
+            tp1:      trend === 'BULLISH' ? last15m.close + tp1Distance : last15m.close - tp1Distance,
+            tp2:      trend === 'BULLISH' ? last15m.close + tp2Distance : last15m.close - tp2Distance,
             atr: curAtr_15m,
             adx: curAdx_1H,
             score: confluenceScore
