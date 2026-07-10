@@ -5,13 +5,14 @@ const { checkMarketRegime } = require('./marketGate');
 const { evaluateTrade, checkExitCriteria } = require('./strategyFutures');
 
 const STATE_FILE = path.join(__dirname, 'paper_futures_state.json');
+const TAKER_FEE = 0.0004; // Binance futures taker fee 0.04%
 
 class PaperFuturesTrader {
-    constructor(initialBalance = 1000) {
+    constructor(initialBalance = 500) {
         this.initialBalance = initialBalance;
         this.state = this.loadState();
         this.maxPositions = 2;
-        this.riskPerTrade = 0.01;
+        this.riskPerTrade = 0.003; // 0.3% risk per trade
         this.leverage = 5;
     }
 
@@ -20,6 +21,7 @@ class PaperFuturesTrader {
             if (fs.existsSync(STATE_FILE)) {
                 const loaded = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
                 if (!loaded.lastEntryCandles) loaded.lastEntryCandles = {};
+                if (!loaded.totalFeesPaid) loaded.totalFeesPaid = 0;
                 return loaded;
             }
         } catch (e) { }
@@ -32,7 +34,8 @@ class PaperFuturesTrader {
             dailyDrawdownPct: 0,
             lastTradeDate: new Date().toISOString().split('T')[0],
             accountBalanceStartOfDay: this.initialBalance,
-            lastEntryCandles: {}
+            lastEntryCandles: {},
+            totalFeesPaid: 0
         };
     }
 
@@ -99,84 +102,98 @@ class PaperFuturesTrader {
         for (const sym of symbols) {
             let pState = this.state.positions[sym];
             pState.candlesHeld = (pState.candlesHeld || 0) + 1;
-            
+
             const currentPrice = currentPrices[sym];
             if (!currentPrice) continue;
 
             const isLong = pState.direction === 'LONG';
 
-            // Check SL
+            // ── Trailing Stop (active after TP1) ────────────────────────
+            if (pState.stage === 'TP1' || pState.stage === 'TP2') {
+                const atr = pState.atr || Math.abs(pState.tp1 - pState.entryPrice) / 1.0;
+                if (isLong) {
+                    const trailStop = currentPrice - atr;
+                    if (trailStop > pState.stopLoss) {
+                        pState.stopLoss = trailStop;
+                        console.log(`[${sym}] Trailing SL moved up to ${trailStop.toFixed(6)}`);
+                    }
+                } else {
+                    const trailStop = currentPrice + atr;
+                    if (trailStop < pState.stopLoss) {
+                        pState.stopLoss = trailStop;
+                        console.log(`[${sym}] Trailing SL moved down to ${trailStop.toFixed(6)}`);
+                    }
+                }
+            }
+
+            // ── Stop Loss ───────────────────────────────────────────────
             const hitSL = isLong ? (currentPrice <= pState.stopLoss) : (currentPrice >= pState.stopLoss);
             if (hitSL) {
-                console.log(`Stop Loss hit for ${sym}.`);
-                this.closePosition(sym, currentPrice, 'STOP_LOSS');
+                console.log(`Stop Loss hit for ${sym} at ${pState.stopLoss}.`);
+                this.closePosition(sym, pState.stopLoss, 'STOP_LOSS');
                 continue;
             }
 
-            // Check Time Stop
+            // ── Time Stop: 3 hours ──────────────────────────────────────
             if (pState.candlesHeld >= 180 && pState.stage === 'INITIAL') {
-                console.log(`Time Stop (180 mins) for ${sym}. Closing.`);
+                console.log(`Time Stop (3h) for ${sym}. Closing.`);
                 this.closePosition(sym, currentPrice, 'TIME_STOP');
                 continue;
             }
 
-            // Check TP1
+            // ── TP1: close 50%, move SL to entry breakeven ──────────────
             if (pState.stage === 'INITIAL') {
                 const hitTP1 = isLong ? (currentPrice >= pState.tp1) : (currentPrice <= pState.tp1);
                 if (hitTP1) {
-                    console.log(`TP1 HIT for ${sym}. Closing 50%, SL to breakeven.`);
-                    const closeQty = pState.qty * 0.5;
-                    this.executePartialClose(sym, currentPrice, closeQty, 'TP1');
-                    pState.stopLoss = pState.entryPrice;
+                    console.log(`TP1 HIT for ${sym} at ${pState.tp1}. Closing 50%, SL -> breakeven.`);
+                    const closeQty = pState.originalQty * 0.5;
+                    this.executePartialClose(sym, pState.tp1, closeQty, 'TP1');
+                    pState.stopLoss = pState.entryPrice; // breakeven
                     pState.stage = 'TP1';
                     this.saveState();
                     continue;
                 }
             }
 
-            // Check TP2
+            // ── TP2: close 30% of original qty ──────────────────────────
             if (pState.stage === 'TP1') {
                 const hitTP2 = isLong ? (currentPrice >= pState.tp2) : (currentPrice <= pState.tp2);
                 if (hitTP2) {
-                    console.log(`TP2 HIT for ${sym}. Closing 30% of original.`);
+                    console.log(`TP2 HIT for ${sym} at ${pState.tp2}. Closing 30% of original.`);
                     const closeQty = pState.originalQty * 0.3;
-                    this.executePartialClose(sym, currentPrice, closeQty, 'TP2');
+                    this.executePartialClose(sym, pState.tp2, closeQty, 'TP2');
+                    // Remaining 20% runner — let trailing stop take it
                     pState.stage = 'TP2';
                     this.saveState();
                     continue;
                 }
             }
 
-            // Check Strategy Exit
-            const exitCheck = await checkExitCriteria(sym, pState.direction);
-            if (exitCheck.exit) {
-                console.log(`Strategy Exit for ${sym}: ${exitCheck.reason}`);
-                this.closePosition(sym, currentPrice, 'STRATEGY_EXIT');
+            // ── Dust cleanup after TP2 ───────────────────────────────────
+            if (pState.stage === 'TP2' && pState.qty <= 0.0001) {
+                this.closePosition(sym, currentPrice, 'FULLY_CLOSED');
                 continue;
             }
-            
+
             this.saveState();
         }
     }
 
     closePosition(symbol, exitPrice, reason) {
         const pState = this.state.positions[symbol];
+        if (!pState) return;
         const isLong = pState.direction === 'LONG';
-        
-        let pnl = 0;
-        if (isLong) {
-            pnl = (exitPrice - pState.entryPrice) * pState.qty;
-        } else {
-            pnl = (pState.entryPrice - exitPrice) * pState.qty;
-        }
-        
-        // Subtract 0.05% fee for market close
-        const notional = pState.qty * exitPrice;
-        const fee = notional * 0.0005;
-        pnl -= fee;
 
+        let rawPnl = isLong
+            ? (exitPrice - pState.entryPrice) * pState.qty
+            : (pState.entryPrice - exitPrice) * pState.qty;
+
+        const fee = pState.qty * exitPrice * TAKER_FEE;
+        const pnl = rawPnl - fee;
+
+        this.state.totalFeesPaid = (this.state.totalFeesPaid || 0) + fee;
         this.state.balance += pnl;
-        
+
         if (pnl < 0) this.state.dailyLosses++;
 
         this.state.tradeHistory.push({
@@ -184,9 +201,12 @@ class PaperFuturesTrader {
             coin: symbol,
             entryPrice: pState.entryPrice,
             exitPrice: exitPrice,
+            qty: pState.qty,
             amount: pState.qty,
-            pnl: pnl,
-            pnlPct: pnl / (pState.entryPrice * pState.qty),
+            grossPnl: parseFloat(rawPnl.toFixed(4)),
+            feePaid: parseFloat(fee.toFixed(4)),
+            pnl: parseFloat(pnl.toFixed(4)),
+            pnlPct: parseFloat((pnl / (pState.costBasis || (pState.entryPrice * pState.qty / this.leverage))).toFixed(6)),
             reason: reason,
             timestamp: new Date().toISOString()
         });
@@ -197,29 +217,33 @@ class PaperFuturesTrader {
 
     executePartialClose(symbol, exitPrice, closeQty, reason) {
         const pState = this.state.positions[symbol];
+        if (!pState) return;
         const isLong = pState.direction === 'LONG';
-        
-        let pnl = 0;
-        if (isLong) {
-            pnl = (exitPrice - pState.entryPrice) * closeQty;
-        } else {
-            pnl = (pState.entryPrice - exitPrice) * closeQty;
-        }
 
-        const fee = closeQty * exitPrice * 0.0005;
-        pnl -= fee;
+        let rawPnl = isLong
+            ? (exitPrice - pState.entryPrice) * closeQty
+            : (pState.entryPrice - exitPrice) * closeQty;
 
+        const fee = closeQty * exitPrice * TAKER_FEE;
+        const pnl = rawPnl - fee;
+
+        this.state.totalFeesPaid = (this.state.totalFeesPaid || 0) + fee;
         this.state.balance += pnl;
         pState.qty -= closeQty;
-        
+        // keep amount in sync for dashboard
+        pState.amount = pState.qty;
+
         this.state.tradeHistory.push({
             action: 'PARTIAL_CLOSE',
             coin: symbol,
             entryPrice: pState.entryPrice,
             exitPrice: exitPrice,
+            qty: closeQty,
             amount: closeQty,
-            pnl: pnl,
-            pnlPct: pnl / (pState.entryPrice * closeQty),
+            grossPnl: parseFloat(rawPnl.toFixed(4)),
+            feePaid: parseFloat(fee.toFixed(4)),
+            pnl: parseFloat(pnl.toFixed(4)),
+            pnlPct: parseFloat((pnl / (pState.costBasis || (pState.entryPrice * closeQty / this.leverage))).toFixed(6)),
             reason: reason,
             timestamp: new Date().toISOString()
         });
@@ -276,36 +300,47 @@ class PaperFuturesTrader {
         const riskAmount = this.state.balance * this.riskPerTrade;
         const distanceToSl = Math.abs(setup.price - setup.stopLoss);
         let positionSize = riskAmount / distanceToSl;
-        
-        // Max leverage limit
-        if (positionSize * setup.price > (this.state.balance * this.leverage)) {
-             positionSize = (this.state.balance * this.leverage) / setup.price;
+
+        // Max leverage cap
+        const maxNotional = this.state.balance * this.leverage;
+        if (positionSize * setup.price > maxNotional) {
+            positionSize = maxNotional / setup.price;
         }
 
-        // Open fee
+        // Open fee (taker)
         const notional = positionSize * setup.price;
-        const fee = notional * 0.0005;
-        this.state.balance -= fee;
+        const openFee = notional * TAKER_FEE;
+        this.state.totalFeesPaid = (this.state.totalFeesPaid || 0) + openFee;
+        this.state.balance -= openFee;
+
+        const atr = setup.atr || distanceToSl / 1.2;
 
         this.state.positions[setup.symbol] = {
             direction: setup.signal,
             entryPrice: setup.price,
             qty: positionSize,
             originalQty: positionSize,
+            amount: positionSize,           // for dashboard
+            costBasis: notional / this.leverage, // margin used
             stopLoss: setup.stopLoss,
             tp1: setup.tp1,
             tp2: setup.tp2,
+            atr: atr,
             stage: 'INITIAL',
             candlesHeld: 0,
             openedAt: new Date().toISOString()
         };
-        
+
         this.state.tradeHistory.push({
             action: setup.signal,
             coin: setup.symbol,
             entryPrice: setup.price,
+            qty: positionSize,
             amount: positionSize,
+            costBasis: notional / this.leverage,
+            feePaid: parseFloat(openFee.toFixed(4)),
             pnl: 0,
+            pnlPct: 0,
             reason: setup.reason,
             timestamp: new Date().toISOString()
         });
