@@ -12,6 +12,8 @@ async function getTopVolumePerps(limit = 40) {
             if (!c.symbol.endsWith('USDT')) return false;
             const baseAsset = c.symbol.replace('USDT', '');
             if (STABLECOINS.includes(baseAsset)) return false;
+            // Minimum $50M daily volume — excludes micro-caps and low-liquidity coins
+            if (parseFloat(c.quoteVolume) < 50_000_000) return false;
             return true;
         });
         validCoins.sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume));
@@ -74,20 +76,21 @@ async function getAtrAndTrend(symbol) {
 
 async function runSelector() {
     console.log("Starting Futures Universe Selection...");
-    const candidates = await getTopVolumePerps(30);
-    
+    // Evaluate top 20 by volume (all already above $50M daily vol from getTopVolumePerps)
+    const candidates = await getTopVolumePerps(20);
+
     let validCoins = [];
-    
+
     for (const sym of candidates) {
         process.stdout.write(`Evaluating ${sym}... `);
-        
+
         const metrics = await getFundingAndSpread(sym);
         if (!metrics) {
             console.log("Failed to fetch metrics.");
             continue;
         }
-        
-        // Filter out extreme funding > 0.10% (0.001) or spread > 0.05% (0.0005)
+
+        // Filter out extreme funding > 0.10% or spread > 0.05%
         if (Math.abs(metrics.fundingRate) > 0.001) {
             console.log(`Rejected (Funding ${metrics.fundingRate})`);
             continue;
@@ -96,18 +99,24 @@ async function runSelector() {
             console.log(`Rejected (Spread ${(metrics.spreadPct*100).toFixed(3)}%)`);
             continue;
         }
-        
+
         const technicals = await getAtrAndTrend(sym);
         if (!technicals) {
-            console.log("Failed to fetch klins.");
+            console.log("Failed to fetch klines.");
             continue;
         }
-        
+
         if (technicals.trend === 'SIDEWAYS') {
             console.log("Rejected (Sideways Trend)");
             continue;
         }
-        
+
+        // Minimum ATR% of 0.5% — coin must actually be moving to be worth trading
+        if (technicals.atrPct < 0.5) {
+            console.log(`Rejected (ATR% too low: ${technicals.atrPct.toFixed(2)}%)`);
+            continue;
+        }
+
         console.log(`Accepted. ATR%: ${technicals.atrPct.toFixed(2)}%`);
         validCoins.push({
             symbol: sym,
@@ -116,13 +125,13 @@ async function runSelector() {
             atrPct: technicals.atrPct,
             trend: technicals.trend
         });
-        
+
         await new Promise(r => setTimeout(r, 500)); // avoid rate limit
     }
-    
+
     // Sort by ATR % to find the most volatile trending coins
     validCoins.sort((a, b) => b.atrPct - a.atrPct);
-    
+
     const top15 = validCoins.slice(0, 15);
     
     const universe = {
