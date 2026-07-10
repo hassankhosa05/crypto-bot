@@ -86,20 +86,20 @@ function evaluateTradeV2(coin, historicalData, regime = 'TRENDING') {
     // LAYER 1 — LIQUIDITY & VOLATILITY (15m Timeframe)
     // ─────────────────────────────────────────────────────────────────────────
     
-    // 1. Volume filter (RVOL >= 0.9)
+    // 1. Volume filter (RVOL >= 0.75) - Relaxed for low volume weekends
     const currentVolume = volumes[volumes.length - 1];
     const avgVol20 = volumes.slice(-20).reduce((a, b) => a + b, 0) / 20;
     const rvol = avgVol20 > 0 ? currentVolume / avgVol20 : 0;
-    if (rvol < 0.9) {
-        return { signal: 'NO TRADE', score: 0, failedReason: 'RVOL', atr: 0, meta: { rvol: parseFloat(rvol.toFixed(2)), required: 0.9 } };
+    if (rvol < 0.75) {
+        return { signal: 'NO TRADE', score: 0, failedReason: 'RVOL', atr: 0, meta: { rvol: parseFloat(rvol.toFixed(2)), required: 0.75 } };
     }
 
-    // 2. Volatility filter (ATR% >= 0.4%)
+    // 2. Volatility filter (ATR% >= 0.25%) - Relaxed for low volatility markets
     const atrCalc = ATR.calculate({ high: highs, low: lows, close: closes, period: 14 });
     const currentATR = atrCalc[atrCalc.length - 1] || 0;
     const atrPct = currentATR / currentPrice;
-    if (atrPct < 0.004) {
-        return { signal: 'NO TRADE', score: 0, failedReason: 'ATR%', atr: currentATR, meta: { atrPct: parseFloat(atrPct.toFixed(4)), required: 0.004 } };
+    if (atrPct < 0.0025) {
+        return { signal: 'NO TRADE', score: 0, failedReason: 'ATR%', atr: currentATR, meta: { atrPct: parseFloat(atrPct.toFixed(4)), required: 0.0025 } };
     }
 
     // 3. Candle activity filter (>= 45% of last 50 candles have body > wick)
