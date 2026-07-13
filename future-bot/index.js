@@ -15,8 +15,8 @@ if (process.env.TRADE_MODE === 'LIVE') {
     trader = new LiveFuturesTrader();
     trader.riskPerTrade = 0.003;
 } else {
-    console.log("Running in PAPER TRADING MODE with $1000 initial balance (0.3% RISK)");
-    trader = new PaperFuturesTrader(1000);
+    console.log("Running in PAPER TRADING MODE with $500 initial balance (0.3% RISK)");
+    trader = new PaperFuturesTrader(500);
     trader.riskPerTrade = 0.003;
 }
 
