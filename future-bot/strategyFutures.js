@@ -37,10 +37,14 @@ function calculateVWAP(klines) {
 // ─────────────────────────────────────────────────────────────────────────────
 async function evaluateTrade(symbol, marketRegime, fundingRate) {
     try {
-        // ── Gate 1: No trades in choppy market ──────────────────────────
+        // ── Gate 1: Regime gate ──────────────────────────────────────────
+        // CHOPPY = true ranging market, no new trades at all.
+        // MILD_CHOPPY_BULL/BEAR = some structure, ultra-strict coin filters apply.
         if (marketRegime === 'CHOPPY') {
             return { signal: 'NONE', reason: '4H Regime is CHOPPY — no trend trades' };
         }
+
+        const isMildChoppy = marketRegime === 'MILD_CHOPPY_BULL' || marketRegime === 'MILD_CHOPPY_BEAR';
 
         // ── Fetch 1H and 15m data ────────────────────────────────────────
         const [klines1H, klines15m] = await Promise.all([
@@ -77,14 +81,20 @@ async function evaluateTrade(symbol, marketRegime, fundingRate) {
         if (coinTrend === 'NONE') {
             return { signal: 'NONE', reason: 'Coin 1H: No clear EMA trend alignment' };
         }
-        if (curAdx_1H < 25) {
-            return { signal: 'NONE', reason: `Coin 1H ADX too weak (${curAdx_1H.toFixed(1)} < 25)` };
+        // ADX filter: stricter during MILD_CHOPPY (require 30), standard requires 25
+        const requiredCoinAdx = isMildChoppy ? 30 : 25;
+        if (curAdx_1H < requiredCoinAdx) {
+            return { signal: 'NONE', reason: `Coin 1H ADX too weak (${curAdx_1H.toFixed(1)} < ${requiredCoinAdx})` };
         }
-        if (marketRegime === 'BULLISH' && coinTrend === 'BEARISH') {
-            return { signal: 'NONE', reason: 'Coin trend conflicts with BULLISH global regime' };
+        // Regime direction matching (covers BULLISH, BEARISH, and MILD_CHOPPY variants)
+        const regimeWantsBull = marketRegime === 'BULLISH' || marketRegime === 'MILD_CHOPPY_BULL';
+        const regimeWantsBear = marketRegime === 'BEARISH' || marketRegime === 'MILD_CHOPPY_BEAR';
+
+        if (regimeWantsBull && coinTrend === 'BEARISH') {
+            return { signal: 'NONE', reason: 'Coin trend conflicts with global BULLISH bias' };
         }
-        if (marketRegime === 'BEARISH' && coinTrend === 'BULLISH') {
-            return { signal: 'NONE', reason: 'Coin trend conflicts with BEARISH global regime' };
+        if (regimeWantsBear && coinTrend === 'BULLISH') {
+            return { signal: 'NONE', reason: 'Coin trend conflicts with global BEARISH bias' };
         }
 
         // ── 15m Tactical Entry Indicators ───────────────────────────────
@@ -112,8 +122,10 @@ async function evaluateTrade(symbol, marketRegime, fundingRate) {
         const curVol = volumes15m[volumes15m.length - 1];
         const rvol   = avgVol > 0 ? curVol / avgVol : 0;
 
-        if (rvol < 1.3) {
-            return { signal: 'NONE', reason: `RVOL too low (${rvol.toFixed(2)} < 1.3)` };
+        // RVOL filter: stricter during MILD_CHOPPY (require 1.5), standard requires 1.3
+        const requiredRvol = isMildChoppy ? 1.5 : 1.3;
+        if (rvol < requiredRvol) {
+            return { signal: 'NONE', reason: `RVOL too low (${rvol.toFixed(2)} < ${requiredRvol})` };
         }
 
         // ── Gate 4: Funding sanity check ─────────────────────────────────
@@ -158,8 +170,10 @@ async function evaluateTrade(symbol, marketRegime, fundingRate) {
             if (strongBear) confirmations++;
         }
 
-        if (confirmations < 2) {
-            return { signal: 'NONE', reason: `Need ≥2 confirmations, got ${confirmations}` };
+        // MILD_CHOPPY requires all 3 confirmations (RSI + break + strong candle)
+        const requiredConfirmations = isMildChoppy ? 3 : 2;
+        if (confirmations < requiredConfirmations) {
+            return { signal: 'NONE', reason: `Need ≥${requiredConfirmations} confirmations, got ${confirmations}` };
         }
 
         // ── SL only — no TP1/TP2 targets ────────────────────────────────

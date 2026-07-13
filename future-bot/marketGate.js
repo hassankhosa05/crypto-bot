@@ -5,10 +5,12 @@ const BTC_SYMBOL = 'BTCUSDT';
 const LIMIT = 250;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Multi-Timeframe Regime: 4H = Strategic Direction
-// BULLISH  → BTC 4H EMA20 > EMA50 AND ADX > 20 → Longs only
-// BEARISH  → BTC 4H EMA20 < EMA50 AND ADX > 20 → Shorts only
-// CHOPPY   → Anything else                       → No new trades
+// Multi-Timeframe Regime: 4H BTC = Strategic Direction
+//
+// BULLISH     → EMA20 > EMA50 AND ADX > 25          → Longs only (standard filters)
+// BEARISH     → EMA20 < EMA50 AND ADX > 25          → Shorts only (standard filters)
+// MILD_CHOPPY → ADX 18–25 AND EMAs have clear slope → Allow, but ultra-strict coin filters
+// CHOPPY      → ADX < 18 OR EMAs flat/crossing      → No new trades at all
 // ─────────────────────────────────────────────────────────────────────────────
 async function checkMarketRegime() {
     try {
@@ -27,21 +29,41 @@ async function checkMarketRegime() {
         const ema50 = EMA.calculate({ period: 50, values: closes });
         const adxResult = ADX.calculate({ high: highs, low: lows, close: closes, period: 14 });
 
-        const curEma20 = ema20[ema20.length - 1];
-        const curEma50 = ema50[ema50.length - 1];
-        const curAdx   = adxResult[adxResult.length - 1]?.adx || 0;
+        const curEma20  = ema20[ema20.length - 1];
+        const curEma50  = ema50[ema50.length - 1];
+        const prevEma20 = ema20[ema20.length - 4]; // 1 bar ago (3 × 4H = 12H lookback for slope)
+        const prevEma50 = ema50[ema50.length - 4];
+        const curAdx    = adxResult[adxResult.length - 1]?.adx || 0;
 
-        console.log(`[MarketGate] BTC 4H → EMA20: ${curEma20?.toFixed(2)}, EMA50: ${curEma50?.toFixed(2)}, ADX: ${curAdx?.toFixed(2)}`);
+        // EMA slope: is the fast EMA clearly moving in one direction?
+        const ema20Slope = curEma20 - prevEma20; // positive = rising, negative = falling
+        const ema50Slope = curEma50 - prevEma50;
+        const emaClearSlope = Math.abs(ema20Slope) > 0 && Math.sign(ema20Slope) === Math.sign(ema50Slope);
 
-        if (curAdx > 20) {
+        console.log(
+            `[MarketGate] BTC 4H → EMA20: ${curEma20?.toFixed(2)}, EMA50: ${curEma50?.toFixed(2)}, ` +
+            `ADX: ${curAdx?.toFixed(2)}, EMA slope aligned: ${emaClearSlope}`
+        );
+
+        // ── True trending ────────────────────────────────────────────────
+        if (curAdx > 25) {
             if (curEma20 > curEma50) return 'BULLISH';
             if (curEma20 < curEma50) return 'BEARISH';
         }
 
-        return 'CHOPPY'; // Fail-safe: choppy = no new trend trades
+        // ── Mild choppy: some trend structure but not strong enough ──────
+        // ADX 18–25 with EMAs still sloping in the same direction
+        if (curAdx >= 18 && emaClearSlope) {
+            if (curEma20 > curEma50) return 'MILD_CHOPPY_BULL'; // can look for longs, strict filters
+            if (curEma20 < curEma50) return 'MILD_CHOPPY_BEAR'; // can look for shorts, strict filters
+        }
+
+        // ── True choppy: flat, no direction ─────────────────────────────
+        return 'CHOPPY';
+
     } catch (error) {
         console.error('Error in Global Market Gate:', error.message);
-        return 'CHOPPY'; // Fail-safe default
+        return 'CHOPPY'; // fail-safe
     }
 }
 
