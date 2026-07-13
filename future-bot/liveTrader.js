@@ -245,8 +245,12 @@ class LiveFuturesTrader {
                     const bePrice = formatStep(pState.entryPrice, info.tickSize);
                     console.log(`[${sym}] Candle closed above +1R → Moving SL to break-even (${bePrice})`);
 
-                    // Cancel all open orders and place new STOP_MARKET at entry
+                    // Safety: place new SL FIRST, then cancel old one.
+                    // This ensures there is always a stop on the exchange,
+                    // even if the bot crashes during the transition.
+                    await api.placeConditionalOrder(sym, closeSide, 'STOP_MARKET', 0, bePrice, true);
                     await api.cancelAllOpenOrders(sym);
+                    // Re-place after cancel to ensure only one clean SL exists
                     await api.placeConditionalOrder(sym, closeSide, 'STOP_MARKET', 0, bePrice, true);
 
                     pState.stopLoss = pState.entryPrice;
@@ -277,8 +281,11 @@ class LiveFuturesTrader {
                 const trailPrice = formatStep(newTrailStop, info.tickSize);
                 console.log(`[${sym}] Updating trail SL → ${trailPrice} (peak: ${pState.peakPrice.toFixed(6)})`);
 
-                // Cancel existing SL and place updated one
+                // Safety: place new trail SL FIRST, then cancel old one.
+                // This ensures there is always a stop on the exchange.
+                await api.placeConditionalOrder(sym, closeSide, 'STOP_MARKET', 0, trailPrice, true);
                 await api.cancelAllOpenOrders(sym);
+                // Re-place after cancel to ensure only one clean SL exists
                 await api.placeConditionalOrder(sym, closeSide, 'STOP_MARKET', 0, trailPrice, true);
 
                 pState.stopLoss = newTrailStop;
