@@ -27,9 +27,10 @@ const TAKER_FEE  = 0.0004; // Binance futures taker fee 0.04%
 //   • ATR trail exit or break-even exit → no cooldown (trend could continue).
 // ─────────────────────────────────────────────────────────────────────────────
 
-const BREAKEVEN_TRIGGER_R  = 1.0; // Move SL to entry when profit reaches +1R
+const BREAKEVEN_TRIGGER_R  = 1.0; // Move SL to entry when candle CLOSES above +1R
 const TRAIL_TRIGGER_R      = 1.5; // Start ATR trail when profit reaches +1.5R
-const ATR_TRAIL_MULTIPLIER = 2.5; // Trail = peak ± (2.5 × ATR)
+const ATR_TRAIL_MULTIPLIER = 2.5; // Trail = peak ± (ATR_TRAIL_MULTIPLIER × ATR). Try 2.0/2.5/3.0
+const ATR_PERIOD           = 14;  // ATR period used in trailing stop calculation
 const SL_COOLDOWN_MS       = 4 * 60 * 60 * 1000; // 4 hours in ms
 
 class PaperFuturesTrader {
@@ -145,36 +146,60 @@ class PaperFuturesTrader {
 
         const currentPrices = await this.getCurrentPrices(symbols);
 
+        // Fetch last CLOSED 15m candle for each position.
+        // Break-even is triggered only when a candle CLOSES above +1R,
+        // not just a wick, to avoid moving SL on brief spikes.
+        const lastCandleCloses = {};
+        await Promise.all(symbols.map(async (sym) => {
+            try {
+                const res = await axios.get(
+                    `https://fapi.binance.com/fapi/v1/klines?symbol=${sym}&interval=15m&limit=2`
+                );
+                // index 0 = second-to-last (fully closed), index 1 = current (open candle)
+                lastCandleCloses[sym] = parseFloat(res.data[0][4]);
+            } catch (e) {
+                lastCandleCloses[sym] = null;
+            }
+        }));
+
         for (const sym of symbols) {
             let pState = this.state.positions[sym];
             const currentPrice = currentPrices[sym];
+            const lastClose    = lastCandleCloses[sym]; // last fully-closed candle close
             if (!currentPrice) continue;
 
-            const isLong       = pState.direction === 'LONG';
-            const atr          = pState.atr;
-            const initialRisk  = Math.abs(pState.entryPrice - pState.initialStopLoss); // 1R in price
+            const isLong      = pState.direction === 'LONG';
+            const atr         = pState.atr;
+            const initialRisk = Math.abs(pState.entryPrice - pState.initialStopLoss); // 1R in price
 
-            // ── Track peak price (for ATR trailing) ──────────────────────
+            // ── Track peak price using live price (for ATR trailing) ──────
             if (isLong) {
                 pState.peakPrice = Math.max(pState.peakPrice || pState.entryPrice, currentPrice);
             } else {
                 pState.peakPrice = Math.min(pState.peakPrice || pState.entryPrice, currentPrice);
             }
 
-            // ── Profit in R-multiples ─────────────────────────────────────
+            // ── Profit in R-multiples (live price, used for trail trigger) ─
             const profitDistance = isLong
                 ? currentPrice - pState.entryPrice
                 : pState.entryPrice - currentPrice;
             const profitR = initialRisk > 0 ? profitDistance / initialRisk : 0;
 
-            // ── Stage: INITIAL → BREAKEVEN (at +1R) ──────────────────────
-            if (pState.stage === 'INITIAL' && profitR >= BREAKEVEN_TRIGGER_R) {
-                pState.stopLoss = pState.entryPrice;
-                pState.stage    = 'BREAKEVEN';
-                console.log(`[${sym}] +1R reached → SL moved to break-even (${pState.entryPrice.toFixed(6)})`);
+            // ── Stage: INITIAL → BREAKEVEN ────────────────────────────────
+            // Uses the LAST CLOSED CANDLE's close price — not the live tick.
+            // This prevents moving SL on a wick that immediately retraces.
+            if (pState.stage === 'INITIAL' && lastClose !== null && initialRisk > 0) {
+                const closedProfitR = isLong
+                    ? (lastClose - pState.entryPrice) / initialRisk
+                    : (pState.entryPrice - lastClose) / initialRisk;
+                if (closedProfitR >= BREAKEVEN_TRIGGER_R) {
+                    pState.stopLoss = pState.entryPrice;
+                    pState.stage    = 'BREAKEVEN';
+                    console.log(`[${sym}] Candle closed above +1R (closedR=${closedProfitR.toFixed(2)}) → SL → break-even`);
+                }
             }
 
-            // ── Stage: BREAKEVEN → TRAILING (at +1.5R) ───────────────────
+            // ── Stage: BREAKEVEN → TRAILING (at +1.5R live price) ────────
             if (pState.stage === 'BREAKEVEN' && profitR >= TRAIL_TRIGGER_R) {
                 pState.stage = 'TRAILING';
                 console.log(`[${sym}] +1.5R reached → ATR Trailing Stop activated`);
