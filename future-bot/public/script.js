@@ -110,7 +110,7 @@ async function updateDashboard() {
         // --- Recent trades table (last 20) ---
         const tradesBody = document.querySelector('#tradesTable tbody');
         tradesBody.innerHTML = '';
-        const recentTrades = trades.slice(-100).reverse();
+        const recentTrades = trades.slice(-200).reverse();
         if (recentTrades.length === 0) {
             tradesBody.innerHTML = '<tr><td colspan="9" class="empty">No trades yet</td></tr>';
         } else {
