@@ -37,7 +37,7 @@ class PaperFuturesTrader {
     constructor(initialBalance = 500) {
         this.initialBalance = initialBalance;
         this.state = this.loadState();
-        this.maxPositions   = 2;
+        this.maxPositions   = 3;
         this.riskPerTrade   = 0.003; // 0.3% risk per trade
         this.leverage       = 5;
     }

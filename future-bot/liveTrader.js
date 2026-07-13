@@ -48,7 +48,7 @@ function formatStep(value, stepSize) {
 class LiveFuturesTrader {
     constructor() {
         this.state = this.loadState();
-        this.maxPositions     = 2;
+        this.maxPositions     = 3;
         this.riskPerTrade     = 0.01;  // 1% risk per live trade
         this.leverage         = 5;
         this.exchangeInfoCache = null;
