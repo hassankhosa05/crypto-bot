@@ -117,6 +117,13 @@ async function runSelector() {
             continue;
         }
 
+        // Maximum ATR% of 5% — blocks hyper-volatile noise coins (EVAA, LAB, etc.)
+        // These coins have huge candles but very low follow-through and wide spreads.
+        if (technicals.atrPct > 5.0) {
+            console.log(`Rejected (ATR% too high / too noisy: ${technicals.atrPct.toFixed(2)}%)`);
+            continue;
+        }
+
         console.log(`Accepted. ATR%: ${technicals.atrPct.toFixed(2)}%`);
         validCoins.push({
             symbol: sym,
