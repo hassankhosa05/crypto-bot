@@ -32,6 +32,9 @@ const TRAIL_TRIGGER_R      = 1.5; // Start ATR trail when profit reaches +1.5R
 const ATR_TRAIL_MULTIPLIER = 2.5; // Trail = peak ± (ATR_TRAIL_MULTIPLIER × ATR). Try 2.0/2.5/3.0
 const ATR_PERIOD           = 14;  // ATR period used in trailing stop calculation
 const SL_COOLDOWN_MS       = 4 * 60 * 60 * 1000; // 4 hours in ms
+const RUNNER_TRIGGER_R     = 3.0; // Tighten trail when profit reaches +3R
+const RUNNER_TRAIL_MULTIPLIER = 1.5; // Tighter trail multiplier for big runners
+const GLOBAL_COOLDOWN_MS   = 2 * 60 * 60 * 1000; // 2 hours global exit cooldown
 
 class PaperFuturesTrader {
     constructor(initialBalance = 500) {
@@ -49,6 +52,7 @@ class PaperFuturesTrader {
                 if (!loaded.lastEntryCandles) loaded.lastEntryCandles = {};
                 if (!loaded.totalFeesPaid)    loaded.totalFeesPaid = 0;
                 if (!loaded.cooldowns)         loaded.cooldowns = {};
+                if (!loaded.globalCooldownUntil) loaded.globalCooldownUntil = 0;
                 return loaded;
             }
         } catch (e) { }
@@ -63,6 +67,7 @@ class PaperFuturesTrader {
             accountBalanceStartOfDay: this.initialBalance,
             lastEntryCandles:       {},
             cooldowns:              {},
+            globalCooldownUntil:    0,
             totalFeesPaid:          0
         };
     }
@@ -205,19 +210,26 @@ class PaperFuturesTrader {
                 console.log(`[${sym}] +1.5R reached → ATR Trailing Stop activated`);
             }
 
+            // ── Stage: TRAILING → RUNNER (at +3.0R live price) ───────────
+            if (pState.stage === 'TRAILING' && profitR >= RUNNER_TRIGGER_R) {
+                pState.stage = 'RUNNER';
+                console.log(`[${sym}] +3.0R reached → ATR Trailing Stop tightened (Accelerated Trail)`);
+            }
+
             // ── Update ATR Trailing Stop ──────────────────────────────────
-            if (pState.stage === 'TRAILING') {
+            if (pState.stage === 'TRAILING' || pState.stage === 'RUNNER') {
+                const multiplier = pState.stage === 'RUNNER' ? RUNNER_TRAIL_MULTIPLIER : ATR_TRAIL_MULTIPLIER;
                 if (isLong) {
-                    const trailStop = pState.peakPrice - ATR_TRAIL_MULTIPLIER * atr;
+                    const trailStop = pState.peakPrice - multiplier * atr;
                     if (trailStop > pState.stopLoss) {
                         pState.stopLoss = trailStop;
-                        console.log(`[${sym}] Trail SL → ${trailStop.toFixed(6)} (peak: ${pState.peakPrice.toFixed(6)})`);
+                        console.log(`[${sym}] [${pState.stage}] Trail SL → ${trailStop.toFixed(6)} (peak: ${pState.peakPrice.toFixed(6)})`);
                     }
                 } else {
-                    const trailStop = pState.peakPrice + ATR_TRAIL_MULTIPLIER * atr;
+                    const trailStop = pState.peakPrice + multiplier * atr;
                     if (trailStop < pState.stopLoss) {
                         pState.stopLoss = trailStop;
-                        console.log(`[${sym}] Trail SL → ${trailStop.toFixed(6)} (peak: ${pState.peakPrice.toFixed(6)})`);
+                        console.log(`[${sym}] [${pState.stage}] Trail SL → ${trailStop.toFixed(6)} (peak: ${pState.peakPrice.toFixed(6)})`);
                     }
                 }
             }
@@ -229,7 +241,9 @@ class PaperFuturesTrader {
 
             if (hitSL) {
                 const isInitialSL = pState.stage === 'INITIAL';
-                const reason = isInitialSL ? 'STOP_LOSS' : (pState.stage === 'TRAILING' ? 'TRAIL_STOP' : 'BREAKEVEN_STOP');
+                const reason = isInitialSL 
+                    ? 'STOP_LOSS' 
+                    : (pState.stage === 'RUNNER' ? 'RUNNER_TRAIL_STOP' : (pState.stage === 'TRAILING' ? 'TRAIL_STOP' : 'BREAKEVEN_STOP'));
                 console.log(`[${sym}] ${reason} hit at ${pState.stopLoss.toFixed(6)}`);
                 this.closePosition(sym, pState.stopLoss, reason);
 
@@ -277,11 +291,21 @@ class PaperFuturesTrader {
         });
 
         delete this.state.positions[symbol];
+        // Set Global Exit Cooldown of 2 hours on any full close
+        this.state.globalCooldownUntil = Date.now() + GLOBAL_COOLDOWN_MS;
+        console.log(`Global Exit Cooldown activated until ${new Date(this.state.globalCooldownUntil).toISOString()}`);
         this.saveState();
     }
 
     async scanForEntries(regime) {
         if (Object.keys(this.state.positions).length >= this.maxPositions) return;
+
+        // Global exit cooldown check
+        if (this.state.globalCooldownUntil && Date.now() < this.state.globalCooldownUntil) {
+            const minsLeft = Math.round((this.state.globalCooldownUntil - Date.now()) / 60000);
+            console.log(`[Scan] Skipping entries due to Global Exit Cooldown (${minsLeft} mins left).`);
+            return;
+        }
 
         const universePath = path.join(__dirname, 'active_universe.json');
         if (!fs.existsSync(universePath)) return;

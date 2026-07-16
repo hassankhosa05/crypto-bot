@@ -36,6 +36,9 @@ const TRAIL_TRIGGER_R      = 1.5; // Start ATR trail when profit reaches +1.5R
 const ATR_TRAIL_MULTIPLIER = 2.5; // Trail = peak ± (ATR_TRAIL_MULTIPLIER × ATR). Try 2.0/2.5/3.0
 const ATR_PERIOD           = 14;  // ATR period used in trailing stop calculation
 const SL_COOLDOWN_MS       = 4 * 60 * 60 * 1000; // 4 hours in ms
+const RUNNER_TRIGGER_R     = 3.0; // Tighten trail when profit reaches +3R
+const RUNNER_TRAIL_MULTIPLIER = 1.5; // Tighter trail multiplier for big runners
+const GLOBAL_COOLDOWN_MS   = 2 * 60 * 60 * 1000; // 2 hours global exit cooldown
 
 // Round to exchange step/tick size
 function formatStep(value, stepSize) {
@@ -175,6 +178,9 @@ class LiveFuturesTrader {
                 if (pState.stage === 'INITIAL') {
                     this.setCooldown(sym);
                 }
+                // Set global cooldown of 2 hours on any exit
+                this.state.globalCooldownUntil = Date.now() + GLOBAL_COOLDOWN_MS;
+                console.log(`Global Exit Cooldown activated until ${new Date(this.state.globalCooldownUntil).toISOString()}`);
                 delete this.state.positions[sym];
                 this.saveState();
             }
@@ -267,19 +273,27 @@ class LiveFuturesTrader {
                 this.saveState();
             }
 
+            // ── Stage: TRAILING → RUNNER (at +3.0R live price) ───────────
+            if (pState.stage === 'TRAILING' && profitR >= RUNNER_TRIGGER_R) {
+                pState.stage = 'RUNNER';
+                console.log(`[${sym}] +3.0R reached → ATR Trailing Stop tightened (Accelerated Trail)`);
+                this.saveState();
+            }
+
             // ── Update ATR Trailing Stop on exchange ──────────────────────
-            if (pState.stage === 'TRAILING') {
+            if (pState.stage === 'TRAILING' || pState.stage === 'RUNNER') {
+                const multiplier = pState.stage === 'RUNNER' ? RUNNER_TRAIL_MULTIPLIER : ATR_TRAIL_MULTIPLIER;
                 let newTrailStop;
                 if (isLong) {
-                    newTrailStop = pState.peakPrice - ATR_TRAIL_MULTIPLIER * atr;
+                    newTrailStop = pState.peakPrice - multiplier * atr;
                     if (newTrailStop <= pState.stopLoss) { this.saveState(); continue; } // no improvement
                 } else {
-                    newTrailStop = pState.peakPrice + ATR_TRAIL_MULTIPLIER * atr;
+                    newTrailStop = pState.peakPrice + multiplier * atr;
                     if (newTrailStop >= pState.stopLoss) { this.saveState(); continue; } // no improvement
                 }
 
                 const trailPrice = formatStep(newTrailStop, info.tickSize);
-                console.log(`[${sym}] Updating trail SL → ${trailPrice} (peak: ${pState.peakPrice.toFixed(6)})`);
+                console.log(`[${sym}] [${pState.stage}] Updating trail SL → ${trailPrice} (peak: ${pState.peakPrice.toFixed(6)})`);
 
                 // Safety: place new trail SL FIRST, then cancel old one.
                 // This ensures there is always a stop on the exchange.
@@ -299,6 +313,13 @@ class LiveFuturesTrader {
     // ── Scan universe for new entries ────────────────────────────────────────
     async scanForEntries(regime, currentBalance) {
         if (Object.keys(this.state.positions).length >= this.maxPositions) return;
+
+        // Global exit cooldown check
+        if (this.state.globalCooldownUntil && Date.now() < this.state.globalCooldownUntil) {
+            const minsLeft = Math.round((this.state.globalCooldownUntil - Date.now()) / 60000);
+            console.log(`[Scan] Skipping entries due to Global Exit Cooldown (${minsLeft} mins left).`);
+            return;
+        }
 
         const universePath = path.join(__dirname, 'active_universe.json');
         if (!fs.existsSync(universePath)) return;

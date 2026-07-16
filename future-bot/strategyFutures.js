@@ -46,10 +46,11 @@ async function evaluateTrade(symbol, marketRegime, fundingRate) {
 
         const isMildChoppy = marketRegime === 'MILD_CHOPPY_BULL' || marketRegime === 'MILD_CHOPPY_BEAR';
 
-        // ── Fetch 1H and 15m data ────────────────────────────────────────
-        const [klines1H, klines15m] = await Promise.all([
+        // ── Fetch 1H and 15m data (including BTC 15m for short-term correlation check) ──
+        const [klines1H, klines15m, btcKlines15m] = await Promise.all([
             getKlines(symbol, '1h', 100),
-            getKlines(symbol, '15m', 100)
+            getKlines(symbol, '15m', 100),
+            symbol === 'BTCUSDT' ? Promise.resolve([]) : getKlines('BTCUSDT', '15m', 50).catch(() => [])
         ]);
 
         if (klines1H.length < 55 || klines15m.length < 50) {
@@ -95,6 +96,22 @@ async function evaluateTrade(symbol, marketRegime, fundingRate) {
         }
         if (regimeWantsBear && coinTrend === 'BULLISH') {
             return { signal: 'NONE', reason: 'Coin trend conflicts with global BEARISH bias' };
+        }
+
+        // ── Gate 2.5: BTC Short-Term (15m) Filter ───────────────────────
+        const btcKlines = symbol === 'BTCUSDT' ? klines15m : btcKlines15m;
+        if (btcKlines && btcKlines.length >= 25) {
+            const btcCloses = btcKlines.map(k => k.close);
+            const btcEma21 = EMA.calculate({ period: 21, values: btcCloses });
+            const curBtcEma21 = btcEma21[btcEma21.length - 1];
+            const curBtcPrice = btcCloses[btcCloses.length - 1];
+
+            if (coinTrend === 'BULLISH' && curBtcPrice < curBtcEma21) {
+                return { signal: 'NONE', reason: `BTC 15m trend is bearish (${curBtcPrice} < EMA21 ${curBtcEma21.toFixed(2)})` };
+            }
+            if (coinTrend === 'BEARISH' && curBtcPrice > curBtcEma21) {
+                return { signal: 'NONE', reason: `BTC 15m trend is bullish (${curBtcPrice} > EMA21 ${curBtcEma21.toFixed(2)})` };
+            }
         }
 
         // ── 15m Tactical Entry Indicators ───────────────────────────────
