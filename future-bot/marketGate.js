@@ -29,6 +29,7 @@ async function checkMarketRegime() {
         const ema50 = EMA.calculate({ period: 50, values: closes });
         const adxResult = ADX.calculate({ high: highs, low: lows, close: closes, period: 14 });
 
+        const curClose  = closes[closes.length - 1];
         const curEma20  = ema20[ema20.length - 1];
         const curEma50  = ema50[ema50.length - 1];
         const prevEma20 = ema20[ema20.length - 4]; // 1 bar ago (3 × 4H = 12H lookback for slope)
@@ -45,17 +46,17 @@ async function checkMarketRegime() {
             `ADX: ${curAdx?.toFixed(2)}, EMA slope aligned: ${emaClearSlope}`
         );
 
-        // ── True trending ────────────────────────────────────────────────
+        // ── True trending (requires price location alignment to prevent buying distribution tops) ──
         if (curAdx > 25) {
-            if (curEma20 > curEma50) return 'BULLISH';
-            if (curEma20 < curEma50) return 'BEARISH';
+            if (curEma20 > curEma50 && curClose > curEma20) return 'BULLISH';
+            if (curEma20 < curEma50 && curClose < curEma20) return 'BEARISH';
         }
 
         // ── Mild choppy: some trend structure but not strong enough ──────
         // ADX 18–25 with EMAs still sloping in the same direction
         if (curAdx >= 18 && emaClearSlope) {
-            if (curEma20 > curEma50) return 'MILD_CHOPPY_BULL'; // can look for longs, strict filters
-            if (curEma20 < curEma50) return 'MILD_CHOPPY_BEAR'; // can look for shorts, strict filters
+            if (curEma20 > curEma50 && curClose > curEma20) return 'MILD_CHOPPY_BULL'; // can look for longs, strict filters
+            if (curEma20 < curEma50 && curClose < curEma20) return 'MILD_CHOPPY_BEAR'; // can look for shorts, strict filters
         }
 
         // ── True choppy: flat, no direction ─────────────────────────────

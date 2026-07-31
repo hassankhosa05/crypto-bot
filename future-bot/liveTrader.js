@@ -36,7 +36,7 @@ const TRAIL_TRIGGER_R      = 1.5; // Start ATR trail when profit reaches +1.5R
 const ATR_TRAIL_MULTIPLIER = 2.5; // Trail = peak ± (ATR_TRAIL_MULTIPLIER × ATR). Try 2.0/2.5/3.0
 const ATR_PERIOD           = 14;  // ATR period used in trailing stop calculation
 const SL_COOLDOWN_MS       = 4 * 60 * 60 * 1000; // 4 hours in ms
-const RUNNER_TRIGGER_R     = 3.0; // Tighten trail when profit reaches +3R
+const RUNNER_TRIGGER_R     = 2.5; // Tighten trail when profit reaches +2.5R
 const RUNNER_TRAIL_MULTIPLIER = 1.5; // Tighter trail multiplier for big runners
 const GLOBAL_COOLDOWN_MS   = 2 * 60 * 60 * 1000; // 2 hours global exit cooldown
 
@@ -276,7 +276,7 @@ class LiveFuturesTrader {
             // ── Stage: TRAILING → RUNNER (at +3.0R live price) ───────────
             if (pState.stage === 'TRAILING' && profitR >= RUNNER_TRIGGER_R) {
                 pState.stage = 'RUNNER';
-                console.log(`[${sym}] +3.0R reached → ATR Trailing Stop tightened (Accelerated Trail)`);
+                console.log(`[${sym}] +2.5R reached → ATR Trailing Stop tightened (Accelerated Trail)`);
                 this.saveState();
             }
 
