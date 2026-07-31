@@ -17,12 +17,12 @@ const TRADING_CONFIG = {
     takeProfitAtrMultiplier: 1.5,
     takeProfit2AtrMultiplier: 3.0,
     // Sell half at TP1, trail the runner — keeps the move-to-breakeven code live
-    takeProfitFraction: 0.5,
+    // takeProfitFraction disabled — full position kept for trailing stop
     trailingAtrMultiplier: 1.0,
     stopLimitBufferPct: 0.001,
     dailyMaxDrawdownPct: 0.03,
     dailyMaxLosses: 3,
-    maxConcurrentPositions: 5
+    maxConcurrentPositions: 3
 };
 
 function getRiskPctForSymbol(universe, symbol) {

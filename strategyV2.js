@@ -74,6 +74,12 @@ function evaluateTradeV2(coin, historicalData, regime = 'TRENDING') {
         return { signal: 'NO TRADE', score: 0, failedReason: 'Insufficient history', atr: 0 };
     }
 
+    // Spot can only buy LONGs. Block buying when global regime is BEARISH or CHOPPY
+    const regimeAllowsLong = regime === 'BULLISH' || regime === 'MILD_CHOPPY_BULL' || regime === 'TRENDING';
+    if (!regimeAllowsLong) {
+        return { signal: 'NO TRADE', score: 0, failedReason: `Spot LONGs blocked in ${regime} regime`, atr: 0 };
+    }
+
     const closes  = historicalData.map(x => x.close);
     const highs   = historicalData.map(x => x.high);
     const lows    = historicalData.map(x => x.low);

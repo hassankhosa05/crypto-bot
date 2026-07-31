@@ -8,9 +8,11 @@ const STATE_FILE = path.join(DATA_DIR, 'portfolio.json');
 const UNIVERSE_FILE = path.join(DATA_DIR, 'active_universe.json');
 
 const TRADE_HISTORY_CAP = 500;
+const SL_COOLDOWN_MS = 4 * 60 * 60 * 1000;     // 4 hours symbol SL cooldown
+const GLOBAL_COOLDOWN_MS = 2 * 60 * 60 * 1000; // 2 hours global exit cooldown
 
 class PaperTrader {
-    constructor(initialBalance = 300, googleSheetsLogger = null) {
+    constructor(initialBalance = 500, googleSheetsLogger = null) {
         this.logger = googleSheetsLogger;
         this.state = this.loadState() || {
             initialBalance,
@@ -21,13 +23,17 @@ class PaperTrader {
             dailyLosses: 0,
             dailyDrawdownUSD: 0,
             lastLossDate: new Date().toDateString(),
-            peakEquity: initialBalance
+            peakEquity: initialBalance,
+            cooldowns: {},
+            globalCooldownUntil: 0
         };
-        if (!this.state.initialBalance)       this.state.initialBalance = 300;
+        if (!this.state.initialBalance)       this.state.initialBalance = 500;
         if (this.state.dailyLosses === undefined) this.state.dailyLosses = 0;
         if (this.state.dailyDrawdownUSD === undefined) this.state.dailyDrawdownUSD = 0;
         if (!this.state.lastLossDate)         this.state.lastLossDate = new Date().toDateString();
         if (!this.state.peakEquity)           this.state.peakEquity = this.state.balance;
+        if (!this.state.cooldowns)            this.state.cooldowns = {};
+        if (!this.state.globalCooldownUntil)   this.state.globalCooldownUntil = 0;
     }
 
     loadUniverse() {
@@ -66,7 +72,6 @@ class PaperTrader {
         }
     }
 
-    // Track peak equity for portfolio-value drawdown calculations
     _updatePeakEquity(currentPrices) {
         const portfolioValue = this.getPortfolioValue(currentPrices || this.state.currentPrices || {});
         if (portfolioValue > (this.state.peakEquity || 0)) {
@@ -74,10 +79,39 @@ class PaperTrader {
         }
     }
 
+    isOnCooldown(symbol) {
+        if (!this.state.cooldowns) this.state.cooldowns = {};
+        const until = this.state.cooldowns[symbol];
+        if (!until) return false;
+        if (Date.now() < until) {
+            const minsLeft = Math.round((until - Date.now()) / 60000);
+            console.log(`[SPOT] [${symbol}] On SL cooldown — ${minsLeft} min remaining.`);
+            return true;
+        }
+        delete this.state.cooldowns[symbol];
+        return false;
+    }
+
+    setCooldown(symbol) {
+        if (!this.state.cooldowns) this.state.cooldowns = {};
+        this.state.cooldowns[symbol] = Date.now() + SL_COOLDOWN_MS;
+        console.log(`[SPOT] [${symbol}] 4-hour SL cooldown activated.`);
+    }
+
     async executeTrade(coinSymbol, action, currentPrice, strategyName, reason = '', atr = 0) {
         this.resetDailyLossesIfNewDay();
 
         if (action === 'BUY' && !this.state.positions[coinSymbol]) {
+            // Global exit cooldown check
+            if (this.state.globalCooldownUntil && Date.now() < this.state.globalCooldownUntil) {
+                const minsLeft = Math.round((this.state.globalCooldownUntil - Date.now()) / 60000);
+                console.log(`[SPOT] Skipping BUY for ${coinSymbol} due to Global Exit Cooldown (${minsLeft} mins left).`);
+                return;
+            }
+
+            // Symbol SL cooldown check
+            if (this.isOnCooldown(coinSymbol)) return;
+
             // Gate 1: portfolio-value daily drawdown
             const portfolioValue = this.getPortfolioValue(this.state.currentPrices || {});
             const maxDrawdownUSD = this.state.initialBalance * TRADING_CONFIG.dailyMaxDrawdownPct;
@@ -101,7 +135,7 @@ class PaperTrader {
             const universe = this.loadUniverse();
             const tradeAmountUSD = getTradeAmountUSD(this.state.balance, currentPrice, atr, universe, coinSymbol);
             if (!tradeAmountUSD) {
-                console.log(`Trade size for ${coinSymbol} under $5 limit. Skipping.`);
+                console.log(`Trade size for ${coinSymbol} under  limit. Skipping.`);
                 return;
             }
 
@@ -109,24 +143,22 @@ class PaperTrader {
             this.state.balance -= (tradeAmountUSD + fee);
 
             const coinAmount = tradeAmountUSD / currentPrice;
-            const slPrice   = currentPrice - (atr * 1.2);
-            const tp1Price  = currentPrice + (atr * 1.5);
-            const tp2Price  = currentPrice + (atr * 3.0);
+            const slPrice    = currentPrice - (atr * 1.2);
 
             this.state.positions[coinSymbol] = {
                 amount: coinAmount,
                 totalSize: coinAmount,
                 entryPrice: currentPrice,
-                slPrice,
-                tp1Price,
-                tp2Price,
-                tp1Hit: false,
+                slPrice: slPrice,
+                initialSlPrice: slPrice,
+                peakPrice: currentPrice,
+                stage: 'INITIAL',
                 entryAtr: atr,
                 strategy: strategyName,
                 timestamp: Date.now()
             };
 
-            const logMsg = `Bought ${coinAmount.toFixed(4)} ${coinSymbol} at ${currentPrice.toFixed(4)}. SL: ${slPrice.toFixed(4)}, TP: ${tp1Price.toFixed(4)}`;
+            const logMsg = `[SPOT] Bought ${coinAmount.toFixed(4)} ${coinSymbol} at $${currentPrice.toFixed(4)}. SL: $${slPrice.toFixed(4)}`;
             console.log(logMsg);
             this.state.tradeHistory.push({ action: 'BUY', coin: coinSymbol, price: currentPrice, amount: coinAmount, strategy: strategyName, reason, timestamp: new Date().toISOString() });
             this._capTradeHistory();
@@ -148,49 +180,25 @@ class PaperTrader {
                 this.state.dailyDrawdownUSD += Math.abs(profitLoss);
             }
 
+            // Set 4-hour symbol SL cooldown if it was an initial Stop Loss exit
+            if (reason === 'Stop Loss') {
+                this.setCooldown(coinSymbol);
+            }
+
+            // Set 2-hour Global Exit Cooldown on any full exit
+            this.state.globalCooldownUntil = Date.now() + GLOBAL_COOLDOWN_MS;
+
             this.state.balance += netSellValue;
             delete this.state.positions[coinSymbol];
 
-            const logMsg = `Sold ${position.amount.toFixed(4)} ${coinSymbol} at $${currentPrice.toFixed(4)}. P/L: $${profitLoss.toFixed(2)} (${(profitLossPct * 100).toFixed(2)}%) - Reason: ${reason}`;
+            const logMsg = `[SPOT] Sold ${position.amount.toFixed(4)} ${coinSymbol} at $${currentPrice.toFixed(4)}. P/L: $${profitLoss.toFixed(2)} (${(profitLossPct * 100).toFixed(2)}%) - Reason: ${reason}`;
             console.log(logMsg);
-            this.state.tradeHistory.push({ action: 'SELL', coin: coinSymbol, price: currentPrice, amount: position.amount, strategy: position.strategy, pnl: profitLoss, reason, timestamp: new Date().toISOString() });
+            this.state.tradeHistory.push({ action: 'SELL', coin: coinSymbol, price: currentPrice, entryPrice: position.entryPrice, exitPrice: currentPrice, amount: position.amount, strategy: position.strategy, pnl: profitLoss, pnlPct: profitLossPct, reason, timestamp: new Date().toISOString() });
             this._capTradeHistory();
             this.saveState();
 
             if (this.logger) await this.logger.logTrade('SELL', coinSymbol, position.entryPrice, currentPrice, position.strategy, profitLoss, reason);
         }
-    }
-
-    async executePartialSell(coinSymbol, currentPrice, fraction, reason) {
-        const position = this.state.positions[coinSymbol];
-        if (!position) return;
-
-        const exInfo = await getExchangeInfo();
-        const symbolRules = exInfo[coinSymbol];
-
-        const sellAmount = position.totalSize * fraction;
-        const sellValueUSD = sellAmount * currentPrice;
-        const remainingAmount = position.amount - sellAmount;
-        const remainingValueUSD = remainingAmount * currentPrice;
-
-        const minNotional = symbolRules ? symbolRules.minNotional : 5;
-        if (sellValueUSD < minNotional || remainingValueUSD < minNotional) {
-            console.log(require('chalk').yellow(`Paper partial sell or remaining size for ${coinSymbol} below MIN_NOTIONAL ($${minNotional}). Executing FULL sell.`));
-            await this.executeTrade(coinSymbol, 'SELL', currentPrice, position.strategy, `${reason} (Full Sell due to MIN_NOTIONAL limit)`);
-            return;
-        }
-
-        const fee = sellValueUSD * TRADING_CONFIG.feeRate;
-        const netSellValue = sellValueUSD - fee;
-        const profitLoss = netSellValue - (sellAmount * position.entryPrice);
-
-        this.state.balance += netSellValue;
-        position.amount -= sellAmount;
-
-        console.log(`Partial Sell (${(fraction * 100).toFixed(0)}%) ${sellAmount.toFixed(4)} ${coinSymbol} at $${currentPrice.toFixed(4)}. P/L: $${profitLoss.toFixed(2)} - Reason: ${reason}`);
-        this.state.tradeHistory.push({ action: 'PARTIAL_SELL', coin: coinSymbol, price: currentPrice, amount: sellAmount, strategy: position.strategy, pnl: profitLoss, reason, timestamp: new Date().toISOString() });
-        this._capTradeHistory();
-        this.saveState();
     }
 
     async checkRiskManagement(coinSymbol, currentPrice) {
@@ -199,44 +207,61 @@ class PaperTrader {
         const position = this.state.positions[coinSymbol];
         this.resetDailyLossesIfNewDay();
 
-        if (!position.tp1Hit && currentPrice >= position.tp1Price) {
-            position.tp1Hit = true;
-            await this.executePartialSell(coinSymbol, currentPrice, 0.5, 'Take Profit 1');
-            // Move stop to breakeven after partial TP
-            if (position.slPrice < position.entryPrice) {
-                position.slPrice = position.entryPrice;
+        const atr = position.entryAtr || ((position.entryPrice - position.initialSlPrice) / 1.2);
+        const initialRisk = Math.abs(position.entryPrice - (position.initialSlPrice || (position.entryPrice - atr * 1.2)));
+
+        // Track peak price
+        position.peakPrice = Math.max(position.peakPrice || position.entryPrice, currentPrice);
+
+        const profitDistance = currentPrice - position.entryPrice;
+        const profitR = initialRisk > 0 ? profitDistance / initialRisk : 0;
+
+        // Stage 1: INITIAL -> BREAKEVEN (at +1.0R)
+        if (position.stage === 'INITIAL' && profitR >= 1.0) {
+            position.slPrice = position.entryPrice;
+            position.stage = 'BREAKEVEN';
+            console.log(`[SPOT] [${coinSymbol}] +1.0R reached → SL moved to break-even ($${position.entryPrice.toFixed(4)})`);
+        }
+
+        // Stage 2: BREAKEVEN -> TRAILING (at +1.5R)
+        if (position.stage === 'BREAKEVEN' && profitR >= 1.5) {
+            position.stage = 'TRAILING';
+            console.log(`[SPOT] [${coinSymbol}] +1.5R reached → ATR Trailing Stop activated`);
+        }
+
+        // Stage 3: TRAILING -> RUNNER (at +2.5R)
+        if (position.stage === 'TRAILING' && profitR >= 2.5) {
+            position.stage = 'RUNNER';
+            console.log(`[SPOT] [${coinSymbol}] +2.5R reached → ATR Trailing Stop tightened (Accelerated Trail)`);
+        }
+
+        // Update ATR Trailing Stop
+        if (position.stage === 'TRAILING' || position.stage === 'RUNNER') {
+            const multiplier = position.stage === 'RUNNER' ? 1.5 : 2.5;
+            const newTrailStop = position.peakPrice - (multiplier * atr);
+            if (newTrailStop > position.slPrice) {
+                position.slPrice = newTrailStop;
+                console.log(`[SPOT] [${coinSymbol}] [${position.stage}] Trail SL → $${newTrailStop.toFixed(4)} (peak: $${position.peakPrice.toFixed(4)})`);
             }
-            this.saveState();
         }
 
-        if (this.state.positions[coinSymbol] && position.tp1Hit && currentPrice >= position.tp2Price) {
-            await this.executeTrade(coinSymbol, 'SELL', currentPrice, position.strategy, 'Take Profit 2 (Runner)');
+        // Check SL / Trail Stop execution
+        if (currentPrice <= position.slPrice) {
+            const isInitialSL = position.stage === 'INITIAL';
+            const reason = isInitialSL 
+                ? 'Stop Loss' 
+                : (position.stage === 'RUNNER' ? 'Runner Trail Stop' : (position.stage === 'TRAILING' ? 'Trail Stop' : 'Breakeven Stop'));
+            await this.executeTrade(coinSymbol, 'SELL', currentPrice, position.strategy, reason);
             return true;
         }
 
-        if (this.state.positions[coinSymbol] && currentPrice <= position.slPrice) {
-            await this.executeTrade(coinSymbol, 'SELL', currentPrice, position.strategy, 'Stop Loss');
-            return true;
-        }
-
+        this.saveState();
         return false;
     }
 
     async updateTrailingStops(coinSymbol, currentPrice, emergencyExitFlag = false) {
-        if (!this.state.positions[coinSymbol]) return false;
-
-        const position = this.state.positions[coinSymbol];
-
-        if (position.tp1Hit) {
-            const newStop = currentPrice - (position.entryAtr * 1.0); // trail at 1 x ATR after TP1
-            if (newStop > position.slPrice) {
-                position.slPrice = newStop;
-                this.saveState();
-                console.log(require('chalk').blue(`Trailing Stop moved up for ${coinSymbol} to ${newStop.toFixed(4)}`));
-            }
-        }
-
-        if (emergencyExitFlag) {
+        if (emergencyExitFlag && this.state.positions[coinSymbol]) {
+            const position = this.state.positions[coinSymbol];
             await this.executeTrade(coinSymbol, 'SELL', currentPrice, position.strategy, 'Emergency Exit V2.3');
             return true;
         }
