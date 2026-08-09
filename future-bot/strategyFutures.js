@@ -102,15 +102,17 @@ async function evaluateTrade(symbol, marketRegime, fundingRate) {
         const btcKlines = symbol === 'BTCUSDT' ? klines15m : btcKlines15m;
         if (btcKlines && btcKlines.length >= 25) {
             const btcCloses = btcKlines.map(k => k.close);
-            const btcEma21 = EMA.calculate({ period: 21, values: btcCloses });
-            const curBtcEma21 = btcEma21[btcEma21.length - 1];
+            const btcEma50 = EMA.calculate({ period: 50, values: btcCloses });
+            const curBtcEma50 = btcEma50[btcEma50.length - 1];
             const curBtcPrice = btcCloses[btcCloses.length - 1];
 
-            if (coinTrend === 'BULLISH' && curBtcPrice < curBtcEma21) {
-                return { signal: 'NONE', reason: `BTC 15m trend is bearish (${curBtcPrice} < EMA21 ${curBtcEma21.toFixed(2)})` };
-            }
-            if (coinTrend === 'BEARISH' && curBtcPrice > curBtcEma21) {
-                return { signal: 'NONE', reason: `BTC 15m trend is bullish (${curBtcPrice} > EMA21 ${curBtcEma21.toFixed(2)})` };
+            if (curBtcEma50) {
+                if (coinTrend === "BULLISH" && curBtcPrice < curBtcEma50) {
+                    return { signal: "NONE", reason: "BTC 15m trend is bearish (Price < EMA50)" };
+                }
+                if (coinTrend === "BEARISH" && curBtcPrice > curBtcEma50) {
+                    return { signal: "NONE", reason: "BTC 15m trend is bullish (Price > EMA50)" };
+                }
             }
         }
 
@@ -135,9 +137,10 @@ async function evaluateTrade(symbol, marketRegime, fundingRate) {
 
         // ── Gate 3: RVOL > 1.3 on 15m ───────────────────────────────────
         const volumes15m = klines15m.map(k => k.volume);
-        const avgVol = volumes15m.reduce((a, b) => a + b, 0) / volumes15m.length;
-        const curVol = volumes15m[volumes15m.length - 1];
-        const rvol   = avgVol > 0 ? curVol / avgVol : 0;
+        const prev20Vol  = volumes15m.slice(-22, -2);
+        const avgVol     = prev20Vol.length > 0 ? prev20Vol.reduce((a, b) => a + b, 0) / prev20Vol.length : 1;
+        const completedVol = volumes15m[volumes15m.length - 2] || volumes15m[volumes15m.length - 1];
+        const rvol       = avgVol > 0 ? completedVol / avgVol : 0;
 
         // RVOL filter: stricter during MILD_CHOPPY (require 1.5), standard requires 1.3
         const requiredRvol = isMildChoppy ? 1.5 : 1.3;
