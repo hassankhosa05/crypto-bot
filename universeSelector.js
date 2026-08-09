@@ -31,6 +31,7 @@ async function getTopVolumeCoins(limit = 40) {
             const baseAsset = c.symbol.replace('USDT', '');
             if (STABLECOINS.includes(baseAsset)) return false;
             if (c.symbol.includes('DOWN') || c.symbol.includes('UP')) return false;
+            if (parseFloat(c.quoteVolume) < 50000000) return false; // M+ 24h volume filter
             return true;
         });
         validCoins.sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume));
