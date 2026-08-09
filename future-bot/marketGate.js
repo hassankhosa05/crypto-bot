@@ -46,17 +46,16 @@ async function checkMarketRegime() {
             `ADX: ${curAdx?.toFixed(2)}, EMA slope aligned: ${emaClearSlope}`
         );
 
-        // ── True trending (requires price location alignment to prevent buying distribution tops) ──
+        // ── True trending ────────────────────────────────────────────────
         if (curAdx > 25) {
-            if (curEma20 > curEma50 && curClose > curEma20) return 'BULLISH';
-            if (curEma20 < curEma50 && curClose < curEma20) return 'BEARISH';
+            if (curEma20 > curEma50) return 'BULLISH';
+            if (curEma20 < curEma50) return 'BEARISH';
         }
 
-        // ── Mild choppy: some trend structure but not strong enough ──────
-        // ADX 18–25 with EMAs still sloping in the same direction
+        // ── Mild choppy: ADX 18–25 with aligned EMA slope ─────────────────
         if (curAdx >= 18 && emaClearSlope) {
-            if (curEma20 > curEma50 && curClose > curEma20) return 'MILD_CHOPPY_BULL'; // can look for longs, strict filters
-            if (curEma20 < curEma50 && curClose < curEma20) return 'MILD_CHOPPY_BEAR'; // can look for shorts, strict filters
+            if (curEma20 > curEma50) return 'MILD_CHOPPY_BULL'; // can look for longs, strict filters
+            if (curEma20 < curEma50) return 'MILD_CHOPPY_BEAR'; // can look for shorts, strict filters
         }
 
         // ── True choppy: flat, no direction ─────────────────────────────
