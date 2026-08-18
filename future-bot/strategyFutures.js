@@ -57,7 +57,7 @@ function get1HCandles(historicalData15m) {
     return candles1H;
 }
 
-async function fetchKlines(symbol, interval, limit = 100) {
+async function fetchKlines(symbol, interval, limit = 400) {
     const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
     const res = await axios.get(url);
     return res.data.map(d => ({
