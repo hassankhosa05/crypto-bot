@@ -12,14 +12,13 @@ async function getTopVolumePerps(limit = 40) {
             if (!c.symbol.endsWith('USDT')) return false;
             const baseAsset = c.symbol.replace('USDT', '');
             if (STABLECOINS.includes(baseAsset)) return false;
-            // Minimum M daily volume — excludes micro-caps and low-liquidity coins
             if (parseFloat(c.quoteVolume) < 50_000_000) return false;
             return true;
         });
         validCoins.sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume));
         return validCoins.slice(0, limit).map(c => c.symbol);
     } catch (e) {
-        console.error("Error fetching top coins:", e);
+        console.error('Error fetching top coins:', e);
         return [];
     }
 }
@@ -56,7 +55,7 @@ async function getAtrAndTrend(symbol) {
         const currentAtr = atrResult[atrResult.length - 1] || 0;
         const currentPrice = closes[closes.length - 1];
         
-        const atrPct = (currentAtr / currentPrice) * 100; // ATR as a % of price
+        const atrPct = (currentAtr / currentPrice) * 100;
         
         const ema20 = EMA.calculate({ period: 20, values: closes });
         const ema50 = EMA.calculate({ period: 50, values: closes });
@@ -75,8 +74,118 @@ async function getAtrAndTrend(symbol) {
 }
 
 async function runSelector() {
-    console.log("=== ACTIVE FUTURES UNIVERSE SAVED ===");
-    console.log("Diagnostic Rejections Summary:", JSON.stringify(stats, null, 2));
+    console.log('Starting Futures Universe Selection...');
+    const candidates = await getTopVolumePerps(20);
+
+    const stats = {
+        totalEvaluated: candidates.length,
+        rejectedFunding: 0,
+        rejectedSpread: 0,
+        rejectedKlines: 0,
+        rejectedSideways: 0,
+        rejectedAtrLow: 0,
+        rejectedAtrHigh: 0,
+        accepted: 0,
+        rejectionDetails: {}
+    };
+
+    let validCoins = [];
+
+    for (const sym of candidates) {
+        process.stdout.write(`Evaluating ${sym}... `);
+
+        const metrics = await getFundingAndSpread(sym);
+        if (!metrics) {
+            console.log('Failed to fetch metrics.');
+            stats.rejectedKlines++;
+            stats.rejectionDetails[sym] = 'Fetch metrics failed';
+            continue;
+        }
+
+        if (Math.abs(metrics.fundingRate) > 0.001) {
+            console.log(`Rejected (Funding ${metrics.fundingRate})`);
+            stats.rejectedFunding++;
+            stats.rejectionDetails[sym] = `Funding ${metrics.fundingRate}`;
+            continue;
+        }
+        if (metrics.spreadPct > 0.0005) {
+            console.log(`Rejected (Spread ${(metrics.spreadPct*100).toFixed(3)}%)`);
+            stats.rejectedSpread++;
+            stats.rejectionDetails[sym] = `Spread ${(metrics.spreadPct*100).toFixed(3)}%`;
+            continue;
+        }
+
+        const technicals = await getAtrAndTrend(sym);
+        if (!technicals) {
+            console.log('Failed to fetch klines.');
+            stats.rejectedKlines++;
+            stats.rejectionDetails[sym] = 'Fetch klines failed';
+            continue;
+        }
+
+        if (technicals.trend === 'SIDEWAYS') {
+            console.log('Rejected (Sideways Trend)');
+            stats.rejectedSideways++;
+            stats.rejectionDetails[sym] = 'Sideways Trend';
+            continue;
+        }
+
+        if (technicals.atrPct < 0.5) {
+            console.log(`Rejected (ATR% too low: ${technicals.atrPct.toFixed(2)}%)`);
+            stats.rejectedAtrLow++;
+            stats.rejectionDetails[sym] = `ATR% too low (${technicals.atrPct.toFixed(2)}%)`;
+            continue;
+        }
+
+        if (technicals.atrPct > 5.0) {
+            console.log(`Rejected (ATR% too high / too noisy: ${technicals.atrPct.toFixed(2)}%)`);
+            stats.rejectedAtrHigh++;
+            stats.rejectionDetails[sym] = `ATR% too high (${technicals.atrPct.toFixed(2)}%)`;
+            continue;
+        }
+
+        console.log(`Accepted. ATR%: ${technicals.atrPct.toFixed(2)}%`);
+        stats.accepted++;
+        validCoins.push({
+            symbol: sym,
+            fundingRate: metrics.fundingRate,
+            spreadPct: metrics.spreadPct,
+            atrPct: technicals.atrPct,
+            trend: technicals.trend
+        });
+
+        await new Promise(r => setTimeout(r, 500));
+    }
+
+    validCoins.sort((a, b) => b.atrPct - a.atrPct);
+    const top15 = validCoins.slice(0, 15);
+    
+    const universe = {
+        updatedAt: new Date().toISOString(),
+        diagnosticStats: stats,
+        coins: {}
+    };
+    
+    top15.forEach(c => {
+        universe.coins[c.symbol] = {
+            tier: 1,
+            atrPct: parseFloat(c.atrPct.toFixed(2)),
+            fundingRate: parseFloat(c.fundingRate.toFixed(6)),
+            spreadPct: parseFloat((c.spreadPct * 100).toFixed(3)),
+            trend: c.trend
+        };
+    });
+    
+    const outPath = path.join(__dirname, 'active_universe.json');
+    fs.writeFileSync(outPath, JSON.stringify(universe, null, 2));
+
+    try {
+        const diagPath = path.join(__dirname, 'universe_diagnostics.jsonl');
+        fs.appendFileSync(diagPath, JSON.stringify({ timestamp: universe.updatedAt, stats }) + String.fromCharCode(10));
+    } catch(e) {}
+    
+    console.log('=== ACTIVE FUTURES UNIVERSE SAVED ===');
+    console.log('Diagnostic Rejections Summary:', JSON.stringify(stats, null, 2));
     console.log(JSON.stringify(universe, null, 2));
 }
 
