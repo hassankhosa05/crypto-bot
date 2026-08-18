@@ -346,6 +346,34 @@ class PaperFuturesTrader {
 
         this.saveState();
     }
+
+    async runCycle() {
+        try {
+            const { checkMarketRegime } = require('./marketGate');
+            const regime = await checkMarketRegime();
+            console.log(`
+--- Paper Futures Trader Cycle [${new Date().toISOString()}] ---`);
+            console.log(`Global Market Regime: ${regime}`);
+
+            // Fetch current mark prices for open positions
+            const openSymbols = Object.keys(this.state.positions);
+            if (openSymbols.length > 0) {
+                const currentPrices = {};
+                for (const sym of openSymbols) {
+                    try {
+                        const res = await axios.get(`https://fapi.binance.com/fapi/v1/ticker/price?symbol=${sym}`);
+                        currentPrices[sym] = parseFloat(res.data.price);
+                    } catch (e) {}
+                }
+                await this.updateTrailingStops(currentPrices);
+            }
+
+            // Scan for new entries
+            await this.scanForEntries(regime);
+        } catch (e) {
+            console.error('Error in runCycle:', e.message);
+        }
+    }
 }
 
 module.exports = { PaperFuturesTrader };
