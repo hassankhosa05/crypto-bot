@@ -105,24 +105,20 @@ async function evaluateTrade(symbol, marketRegime, fundingRate) {
             return { signal: 'NONE', reason: diag.failedReason, diag };
         }
 
-        const [klines15m, btcKlines15m] = await Promise.all([
+        const [klines15m, klines1H, btcKlines15m] = await Promise.all([
             fetchKlines(symbol, '15m', 100),
+            fetchKlines(symbol, '1h', 100),
             symbol === 'BTCUSDT' ? null : fetchKlines('BTCUSDT', '15m', 100)
         ]);
 
-        if (klines15m.length < 50) {
+        if (klines15m.length < 50 || klines1H.length < 50) {
             diag.primaryRejectionGate = 'Data Length';
-            diag.failedReason = 'Insufficient 15m candle history';
+            diag.failedReason = 'Insufficient candle history';
             return { signal: 'NONE', reason: diag.failedReason, diag };
         }
 
-        // ── 1H Resampled Indicators ─────────────────────────────────────
-        const candles1H = get1HCandles(klines15m);
-        if (candles1H.length < 20) {
-            diag.primaryRejectionGate = 'Data Length (1H)';
-            diag.failedReason = 'Insufficient 1H candle history';
-            return { signal: 'NONE', reason: diag.failedReason, diag };
-        }
+        // ── 1H Direct Indicators ─────────────────────────────────────────
+        const candles1H = klines1H;
 
         const closes1H = candles1H.map(c => c.close);
         const highs1H  = candles1H.map(c => c.high);
