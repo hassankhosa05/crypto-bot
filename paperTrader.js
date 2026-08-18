@@ -143,7 +143,7 @@ class PaperTrader {
             this.state.balance -= (tradeAmountUSD + fee);
 
             const coinAmount = tradeAmountUSD / currentPrice;
-            const slPrice    = currentPrice - (atr * 1.2);
+            const slPrice    = currentPrice - (atr * 1.5);
 
             this.state.positions[coinSymbol] = {
                 amount: coinAmount,
@@ -207,7 +207,7 @@ class PaperTrader {
         const position = this.state.positions[coinSymbol];
         this.resetDailyLossesIfNewDay();
 
-        const atr = position.entryAtr || ((position.entryPrice - position.initialSlPrice) / 1.2);
+        const atr = position.entryAtr || ((position.entryPrice - position.initialSlPrice) / 1.5);
         const initialRisk = Math.abs(position.entryPrice - (position.initialSlPrice || (position.entryPrice - atr * 1.2)));
 
         // Track peak price

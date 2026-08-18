@@ -190,6 +190,11 @@ function evaluateTradeV2(coin, historicalData, regime = 'TRENDING') {
             return { signal: 'NO TRADE', score: 0, failedReason: 'Not in pullback zone', atr: currentATR, meta: { price: currentPrice, ema21: currentEMA21, vwap } };
         }
 
+        // Overbought guard
+        if (currentRSI > 68) {
+            return { signal: 'NO TRADE', score: 0, failedReason: 'RSI > 68 (Overbought)', atr: currentATR };
+        }
+
         // 2. Confirmations (ONE required):
         // a. RSI > 45 and rising
         const rsiConfirm = currentRSI > 45 && currentRSI > prevRSI;

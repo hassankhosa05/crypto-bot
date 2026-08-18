@@ -394,7 +394,7 @@ class LiveFuturesTrader {
             // Exits are managed in-cycle via break-even + ATR trail logic.
             await api.placeConditionalOrder(setup.symbol, slSide, 'STOP_MARKET', 0, slPrice, true);
 
-            const atr = setup.atr || distanceToSl / 1.2;
+            const atr = setup.atr || distanceToSl / 1.5;
 
             this.state.positions[setup.symbol] = {
                 direction:       setup.signal,

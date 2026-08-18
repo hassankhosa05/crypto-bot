@@ -367,7 +367,7 @@ class PaperFuturesTrader {
         this.state.totalFeesPaid = (this.state.totalFeesPaid || 0) + openFee;
         this.state.balance -= openFee;
 
-        const atr = setup.atr || distanceToSl / 1.2;
+        const atr = setup.atr || distanceToSl / 1.5;
 
         this.state.positions[setup.symbol] = {
             direction:      setup.signal,

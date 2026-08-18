@@ -87,6 +87,22 @@ async function evaluateTrade(symbol, marketRegime, fundingRate) {
         if (curAdx_1H < requiredCoinAdx) {
             return { signal: 'NONE', reason: `Coin 1H ADX too weak (${curAdx_1H.toFixed(1)} < ${requiredCoinAdx})` };
         }
+
+        // Gate 2.1: 1H Violent Dump / Pump Guard (prevents buying relief wicks during dumps or shorting into squeezes)
+        const currentCandle1H = candles1H[candles1H.length - 1];
+        if (currentCandle1H) {
+            const body1H = Math.abs(currentCandle1H.close - currentCandle1H.open);
+            const bodyPct1H = (body1H / currentCandle1H.open) * 100;
+            const is1HDump = currentCandle1H.close < currentCandle1H.open && bodyPct1H > 1.2;
+            const is1HPump = currentCandle1H.close > currentCandle1H.open && bodyPct1H > 1.2;
+
+            if (coinTrend === 'BULLISH' && is1HDump) {
+                return { signal: 'NONE', reason: `Coin 1H is in a heavy dump (-${bodyPct1H.toFixed(2)}%) — blocking dead-cat bounce buy` };
+            }
+            if (coinTrend === 'BEARISH' && is1HPump) {
+                return { signal: 'NONE', reason: `Coin 1H is in a heavy pump (+${bodyPct1H.toFixed(2)}%) — blocking shorting into squeeze` };
+            }
+        }
         // Regime direction matching (covers BULLISH, BEARISH, and MILD_CHOPPY variants)
         const regimeWantsBull = marketRegime === 'BULLISH' || marketRegime === 'MILD_CHOPPY_BULL';
         const regimeWantsBear = marketRegime === 'BEARISH' || marketRegime === 'MILD_CHOPPY_BEAR';
@@ -196,9 +212,17 @@ async function evaluateTrade(symbol, marketRegime, fundingRate) {
             return { signal: 'NONE', reason: `Need ≥${requiredConfirmations} confirmations, got ${confirmations}` };
         }
 
+        // ── Gate 6.5: RSI Overbought / Oversold Exhaustion Guards ─────────
+        if (coinTrend === 'BULLISH' && curRsi_15m > 68) {
+            return { signal: 'NONE', reason: `15m RSI is overbought (${curRsi_15m.toFixed(1)} > 68) — skipping exhaustion top` };
+        }
+        if (coinTrend === 'BEARISH' && curRsi_15m < 32) {
+            return { signal: 'NONE', reason: `15m RSI is oversold (${curRsi_15m.toFixed(1)} < 32) — skipping deep oversold bottom` };
+        }
+
         // ── SL only — no TP1/TP2 targets ────────────────────────────────
-        // Exit management (break-even + ATR trail) is handled in paperFuturesTrader.
-        const slDistance = 1.2 * curAtr_15m;
+        // 1.5 * ATR provides adequate breathing room against normal 15m noise wicks
+        const slDistance = 1.5 * curAtr_15m;
 
         // Score: used to rank multiple simultaneous setups
         let score = curAdx_1H;
