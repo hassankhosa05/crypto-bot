@@ -222,8 +222,7 @@ class PaperFuturesTrader {
 
         // Append to full diagnostic dataset
         try {
-            fs.appendFileSync(COMPLETED_TRADES_FILE, JSON.stringify(tradeRecord) + '
-');
+            fs.appendFileSync(COMPLETED_TRADES_FILE, JSON.stringify(tradeRecord) + "\n");
         } catch(e) {}
 
         delete this.state.positions[symbol];
@@ -260,8 +259,7 @@ class PaperFuturesTrader {
                 signal:       tradeRes.signal,
                 failedReason: tradeRes.reason
             };
-            fs.appendFile(EVALUATIONS_FILE, JSON.stringify(evalRecord) + '
-', (err) => { if (err) console.error(err); });
+            fs.appendFile(EVALUATIONS_FILE, JSON.stringify(evalRecord) + "\n", (err) => { if (err) console.error(err); });
 
             if (tradeRes.signal !== 'NONE') {
                 // If global cooldown is active, measure opportunity cost!
@@ -278,8 +276,7 @@ class PaperFuturesTrader {
                         reason:                 tradeRes.reason
                     };
                     console.log(`[Opportunity Cost] Global Cooldown BLOCKED valid ${tradeRes.signal} on ${sym} (Score: ${tradeRes.score}, ${minsLeftCooldown}m left)`);
-                    fs.appendFile(COOLDOWN_BLOCKED_FILE, JSON.stringify(blockedRecord) + '
-', (err) => { if (err) console.error(err); });
+                    fs.appendFile(COOLDOWN_BLOCKED_FILE, JSON.stringify(blockedRecord) + "\n", (err) => { if (err) console.error(err); });
                 } else {
                     validSetups.push({ symbol: sym, ...tradeRes });
                 }
