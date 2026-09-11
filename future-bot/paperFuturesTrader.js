@@ -226,6 +226,9 @@ class PaperFuturesTrader {
         delete this.state.positions[symbol];
         if (reason === 'STOP_LOSS') {
             this.setCooldown(symbol);
+            // Brief 20-min account breather after a stop loss to avoid stepping into ongoing market spikes
+            this.state.globalCooldownUntil = Date.now() + 20 * 60 * 1000;
+            console.log(`[SL Hit] 20-minute market breather active until ${new Date(this.state.globalCooldownUntil).toISOString()}`);
         }
         this.saveState();
     }
@@ -239,6 +242,12 @@ class PaperFuturesTrader {
 
         if (this.state.dailyLosses >= 3) {
             console.log('[Scan] Daily loss limit (3) reached. Skipping new entries for today.');
+            return;
+        }
+
+        if (this.state.globalCooldownUntil && Date.now() < this.state.globalCooldownUntil) {
+            const minsLeft = Math.round((this.state.globalCooldownUntil - Date.now()) / 60000);
+            console.log(`[Scan] Loss breather active (${minsLeft}m remaining). Pausing new entries.`);
             return;
         }
 

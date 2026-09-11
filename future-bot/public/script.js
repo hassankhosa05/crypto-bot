@@ -128,14 +128,17 @@ async function updateDashboard() {
                 }
 
                 const row = document.createElement('tr');
+                const tradeTime = trade.closedAt || trade.openedAt || trade.timestamp;
+                const tradeCoin = trade.symbol || trade.coin || '';
+                const tradeStrat = trade.direction || trade.strategy || trade.stage || '-';
                 row.innerHTML = `
-                    <td>${fmtTime(trade.timestamp)}</td>
+                    <td>${fmtTime(tradeTime)}</td>
                     <td class="${actionClass}">${trade.action}</td>
-                    <td>${(trade.coin || '').toUpperCase()}</td>
+                    <td>${tradeCoin.toUpperCase()}</td>
                     <td>${fmtPrice(trade.entryPrice ?? trade.price)}</td>
                     <td>${isOpen ? '-' : fmtPrice(trade.exitPrice ?? trade.price)}</td>
                     <td>${Number(trade.amount || trade.qty || 0).toFixed(4)}</td>
-                    <td>${trade.strategy || '-'}</td>
+                    <td>${tradeStrat}</td>
                     <td>${trade.reason || (isOpen ? 'Signal' : '-')}</td>
                     <td class="${isOpen ? '' : pnlClass(pnl)}">${pnlText}</td>
                 `;
