@@ -6,13 +6,11 @@ const { evaluateTrade } = require('./strategyFutures');
 const STATE_FILE = path.join(__dirname, 'paper_futures_state.json');
 const EVALUATIONS_FILE = path.join(__dirname, 'trade_evaluations.jsonl');
 const COMPLETED_TRADES_FILE = path.join(__dirname, 'completed_trades_dataset.jsonl');
-const COOLDOWN_BLOCKED_FILE = path.join(__dirname, 'cooldown_blocked_setups.jsonl');
 
 const TAKER_FEE = 0.0004; // 0.04% taker fee on Binance Futures
 const ATR_TRAIL_MULTIPLIER = 2.5;
 const RUNNER_TRAIL_MULTIPLIER = 1.5;
-const SL_COOLDOWN_MS = 2 * 60 * 60 * 1000; // 2 hours for that losing coin only      // 4 hours on initial SL
-const GLOBAL_COOLDOWN_MS = 2 * 60 * 60 * 1000;  // 2 hours global exit cooldown (measured for opportunity cost)
+const SL_COOLDOWN_MS = 2 * 60 * 60 * 1000; // 2 hours for that losing coin only
 
 class PaperFuturesTrader {
     constructor(initialBalance = 500, riskPerTrade = 0.003, maxPositions = 3, leverage = 5) {
@@ -63,7 +61,7 @@ class PaperFuturesTrader {
 
     setCooldown(symbol) {
         this.state.cooldowns[symbol] = Date.now() + SL_COOLDOWN_MS;
-        console.log(`[${symbol}] 4-hour SL cooldown activated.`);
+        console.log(`[${symbol}] 2-hour SL cooldown activated.`);
     }
 
     async updateTrailingStops(currentPrices) {
@@ -222,7 +220,7 @@ class PaperFuturesTrader {
 
         // Append to full diagnostic dataset
         try {
-            fs.appendFileSync(COMPLETED_TRADES_FILE, JSON.stringify(tradeRecord) + "\n");
+            fs.appendFileSync(COMPLETED_TRADES_FILE, JSON.stringify(tradeRecord) + '\n');
         } catch(e) {}
 
         delete this.state.positions[symbol];
@@ -233,12 +231,22 @@ class PaperFuturesTrader {
     }
 
     async scanForEntries(regime) {
+        const todayStr = new Date().toDateString();
+        if (this.state.lastLossDate !== todayStr) {
+            this.state.dailyLosses = 0;
+            this.state.lastLossDate = todayStr;
+        }
+
+        if (this.state.dailyLosses >= 3) {
+            console.log('[Scan] Daily loss limit (3) reached. Skipping new entries for today.');
+            return;
+        }
+
+        if (Object.keys(this.state.positions).length >= this.maxPositions) return;
+
         const universePath = path.join(__dirname, 'active_universe.json');
         if (!fs.existsSync(universePath)) return;
         const universe = JSON.parse(fs.readFileSync(universePath, 'utf8'));
-
-        const isGlobalCooldownActive = this.state.globalCooldownUntil && Date.now() < this.state.globalCooldownUntil;
-        const minsLeftCooldown = isGlobalCooldownActive ? Math.round((this.state.globalCooldownUntil - Date.now()) / 60000) : 0;
 
         let validSetups = [];
 
@@ -260,32 +268,11 @@ class PaperFuturesTrader {
                 signal:       tradeRes.signal,
                 failedReason: tradeRes.reason
             };
-            fs.appendFile(EVALUATIONS_FILE, JSON.stringify(evalRecord) + "\n", (err) => { if (err) console.error(err); });
+            fs.appendFile(EVALUATIONS_FILE, JSON.stringify(evalRecord) + '\n', (err) => { if (err) console.error(err); });
 
             if (tradeRes.signal !== 'NONE') {
-                // If global cooldown is active, measure opportunity cost!
-                if (isGlobalCooldownActive) {
-                    const blockedRecord = {
-                        timestamp:              new Date().toISOString(),
-                        symbol:                 sym,
-                        signal:                 tradeRes.signal,
-                        price:                  tradeRes.price,
-                        score:                  tradeRes.score,
-                        atr:                    tradeRes.atr,
-                        globalCooldownMinsLeft: minsLeftCooldown,
-                        wouldHaveEntered:       Object.keys(this.state.positions).length < this.maxPositions,
-                        reason:                 tradeRes.reason
-                    };
-                    console.log(`[Opportunity Cost] Global Cooldown BLOCKED valid ${tradeRes.signal} on ${sym} (Score: ${tradeRes.score}, ${minsLeftCooldown}m left)`);
-                    fs.appendFile(COOLDOWN_BLOCKED_FILE, JSON.stringify(blockedRecord) + "\n", (err) => { if (err) console.error(err); });
-                } else {
-                    validSetups.push({ symbol: sym, ...tradeRes });
-                }
+                validSetups.push({ symbol: sym, ...tradeRes });
             }
-        }
-
-        if (isGlobalCooldownActive) {
-            return;
         }
 
         if (Object.keys(this.state.positions).length >= this.maxPositions) return;
