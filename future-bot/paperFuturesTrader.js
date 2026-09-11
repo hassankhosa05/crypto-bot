@@ -11,7 +11,7 @@ const COOLDOWN_BLOCKED_FILE = path.join(__dirname, 'cooldown_blocked_setups.json
 const TAKER_FEE = 0.0004; // 0.04% taker fee on Binance Futures
 const ATR_TRAIL_MULTIPLIER = 2.5;
 const RUNNER_TRAIL_MULTIPLIER = 1.5;
-const SL_COOLDOWN_MS = 4 * 60 * 60 * 1000;      // 4 hours on initial SL
+const SL_COOLDOWN_MS = 2 * 60 * 60 * 1000; // 2 hours for that losing coin only      // 4 hours on initial SL
 const GLOBAL_COOLDOWN_MS = 2 * 60 * 60 * 1000;  // 2 hours global exit cooldown (measured for opportunity cost)
 
 class PaperFuturesTrader {
@@ -226,8 +226,9 @@ class PaperFuturesTrader {
         } catch(e) {}
 
         delete this.state.positions[symbol];
-        this.state.globalCooldownUntil = Date.now() + GLOBAL_COOLDOWN_MS;
-        console.log(`Global Exit Cooldown active until ${new Date(this.state.globalCooldownUntil).toISOString()}`);
+        if (reason === 'STOP_LOSS') {
+            this.setCooldown(symbol);
+        }
         this.saveState();
     }
 

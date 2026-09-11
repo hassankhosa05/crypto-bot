@@ -255,7 +255,7 @@ async function evaluateTrade(symbol, marketRegime, fundingRate) {
         }
         diag.gate4_pass = true;
 
-        // ── Gate 5: RVOL > 1.3 on 15m ───────────────────────────────────
+        // ── Gate 5: Funding Rate Sanity & RVOL Measurement ─────────────
         const volumes15m = klines15m.map(k => k.volume);
         const prev20Vol  = volumes15m.slice(-22, -2);
         const avgVol     = prev20Vol.length > 0 ? prev20Vol.reduce((a, b) => a + b, 0) / prev20Vol.length : 1;
@@ -263,55 +263,21 @@ async function evaluateTrade(symbol, marketRegime, fundingRate) {
         const rvol       = avgVol > 0 ? completedVol / avgVol : 0;
         diag.rvol        = parseFloat(rvol.toFixed(2));
 
-        const requiredRvol = isMildChoppy ? 1.5 : 1.3;
-        if (rvol < requiredRvol) {
-            diag.primaryRejectionGate = 'Gate 5 (RVOL)';
-            diag.failedReason = `RVOL too low (${rvol.toFixed(2)} < ${requiredRvol})`;
-            return { signal: 'NONE', reason: diag.failedReason, diag };
-        }
-        diag.gate5_pass = true;
-
-        // Funding rate sanity check
+        // Funding rate sanity check (blocks extreme crowded trades)
         if (coinTrend === 'BULLISH' && fundingRate > 0.001) {
-            diag.primaryRejectionGate = 'Gate 5.1 (Funding)';
+            diag.primaryRejectionGate = 'Gate 5 (Funding)';
             diag.failedReason = 'Funding too positive for LONG';
             return { signal: 'NONE', reason: diag.failedReason, diag };
         }
         if (coinTrend === 'BEARISH' && fundingRate < -0.001) {
-            diag.primaryRejectionGate = 'Gate 5.1 (Funding)';
+            diag.primaryRejectionGate = 'Gate 5 (Funding)';
             diag.failedReason = 'Funding too negative for SHORT';
             return { signal: 'NONE', reason: diag.failedReason, diag };
         }
+        diag.gate5_pass = true;
 
-        // ── Gate 6: Directional RSI & Momentum Confirmation ───────────────
-        const highestOf3 = Math.max(...highs15m.slice(-4, -1));
-        const lowestOf3  = Math.min(...lows15m.slice(-4, -1));
-
-        const breakHigh   = last15m.close > highestOf3;
-        const breakLow    = last15m.close < lowestOf3;
-        const bodyPct     = Math.abs(last15m.close - last15m.open) / last15m.open * 100;
-        const strongBull  = last15m.close > last15m.open && bodyPct > 0.2;
-        const strongBear  = last15m.close < last15m.open && bodyPct > 0.2;
-
-        let confirmations = 0;
-        if (coinTrend === 'BULLISH') {
-            if (curRsi_15m > 45 && curRsi_15m > prevRsi_15m) confirmations++;
-            if (breakHigh) confirmations++;
-            if (strongBull) confirmations++;
-        } else {
-            if (curRsi_15m < 55 && curRsi_15m < prevRsi_15m) confirmations++;
-            if (breakLow) confirmations++;
-            if (strongBear) confirmations++;
-        }
-
-        const requiredConfirmations = isMildChoppy ? 3 : 2;
-        if (confirmations < requiredConfirmations) {
-            diag.primaryRejectionGate = 'Gate 6 (Momentum Confirmation)';
-            diag.failedReason = `Need ≥${requiredConfirmations} confirmations, got ${confirmations}`;
-            return { signal: 'NONE', reason: diag.failedReason, diag };
-        }
-
-        // Overbought / Oversold Exhaustion Guards
+        // ── Gate 6: Pullback Entry Timing & Exhaustion Guards ───────────
+        // Exhaustion Guards (prevent buying tops >68 or shorting bottoms <32)
         if (coinTrend === 'BULLISH' && curRsi_15m > 68) {
             diag.primaryRejectionGate = 'Gate 6 (RSI Overbought)';
             diag.failedReason = `15m RSI is overbought (${curRsi_15m.toFixed(1)} > 68) — skipping exhaustion top`;
@@ -322,13 +288,34 @@ async function evaluateTrade(symbol, marketRegime, fundingRate) {
             diag.failedReason = `15m RSI is oversold (${curRsi_15m.toFixed(1)} < 32) — skipping deep oversold bottom`;
             return { signal: 'NONE', reason: diag.failedReason, diag };
         }
+
+        // Directional RSI Confirmation (pullback has turned back into trend direction)
+        if (coinTrend === 'BULLISH' && curRsi_15m < 44) {
+            diag.primaryRejectionGate = 'Gate 6 (RSI Momentum)';
+            diag.failedReason = `15m RSI too weak for LONG (${curRsi_15m.toFixed(1)} < 44)`;
+            return { signal: 'NONE', reason: diag.failedReason, diag };
+        }
+        if (coinTrend === 'BEARISH' && curRsi_15m > 56) {
+            diag.primaryRejectionGate = 'Gate 6 (RSI Momentum)';
+            diag.failedReason = `15m RSI too high for SHORT (${curRsi_15m.toFixed(1)} > 56)`;
+            return { signal: 'NONE', reason: diag.failedReason, diag };
+        }
         diag.gate6_pass = true;
 
-        // ── All 6 Gates Passed ──────────────────────────────────────────
+        // ── All Gates Passed: Enter at Pullback / Reclaim Zone ───────────
         diag.finalDecision = 'ACCEPTED';
         const slDistance = 1.5 * curAtr_15m;
 
+        // Score: ADX + RVOL boost + candle structure
         let score = curAdx_1H;
+        if (rvol >= 1.2) score += 10;
+        const highestOf3 = Math.max(...highs15m.slice(-4, -1));
+        const lowestOf3  = Math.min(...lows15m.slice(-4, -1));
+        const breakHigh   = last15m.close > highestOf3;
+        const breakLow    = last15m.close < lowestOf3;
+        const bodyPct     = Math.abs(last15m.close - last15m.open) / last15m.open * 100;
+        const strongBull  = last15m.close > last15m.open && bodyPct > 0.2;
+        const strongBear  = last15m.close < last15m.open && bodyPct > 0.2;
         if (breakHigh || breakLow) score += 5;
         if (strongBull || strongBear) score += 5;
 

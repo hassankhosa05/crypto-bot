@@ -4,6 +4,10 @@ const path = require('path');
 const { EMA, ATR } = require('technicalindicators');
 
 const STABLECOINS = ['USDT', 'USDC', 'FDUSD', 'TUSD', 'USD1', 'RLUSD', 'DAI', 'USDP'];
+const NON_CRYPTO_OR_SYNTHETIC = [
+    'XAU', 'XAG', 'SOXL', 'SKHYNIX', 'SKHY', 'MU', 'SPCX', 'KORU', 'CL', 'BZ', 'SNXX', 
+    'GPS', 'ACE', 'NVDA', 'TSLA', 'AAPL', 'AMZN', 'MSFT', 'GOOGL', 'META'
+];
 
 async function getTopVolumePerps(limit = 40) {
     try {
@@ -12,6 +16,7 @@ async function getTopVolumePerps(limit = 40) {
             if (!c.symbol.endsWith('USDT')) return false;
             const baseAsset = c.symbol.replace('USDT', '');
             if (STABLECOINS.includes(baseAsset)) return false;
+            if (NON_CRYPTO_OR_SYNTHETIC.includes(baseAsset)) return false;
             if (parseFloat(c.quoteVolume) < 50_000_000) return false;
             return true;
         });

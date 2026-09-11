@@ -19,7 +19,9 @@ const fs = require('fs');
 const path = require('path');
 
 const DATA_DIR = process.env.DATA_DIR || __dirname;
-const STATE_FILE = path.join(DATA_DIR, 'portfolio.json');
+const STATE_FILE = fs.existsSync(path.join(DATA_DIR, 'paper_futures_state.json')) 
+    ? path.join(DATA_DIR, 'paper_futures_state.json') 
+    : (fs.existsSync(path.join(DATA_DIR, 'live_futures_state.json')) ? path.join(DATA_DIR, 'live_futures_state.json') : path.join(DATA_DIR, 'portfolio.json'));
 const UNIVERSE_FILE = path.join(DATA_DIR, 'active_universe.json');
 const REGIME_LOG = path.join(DATA_DIR, 'regime_log.jsonl');
 
@@ -70,12 +72,13 @@ function fmt(n, d = 2) {
  */
 function computeStats(state) {
     const closes = (state.tradeHistory || []).filter(
-        t => (t.action === 'SELL' || t.action === 'PARTIAL_SELL') && typeof t.pnl === 'number'
+        t => (t.action === 'SELL' || t.action === 'PARTIAL_SELL' || t.action === 'CLOSE_LONG' || t.action === 'CLOSE_SHORT') && typeof t.pnl === 'number'
     );
 
     const byCoin = {};
     for (const t of closes) {
-        (byCoin[t.coin] = byCoin[t.coin] || []).push(t);
+        const sym = t.symbol || t.coin;
+        (byCoin[sym] = byCoin[sym] || []).push(t);
     }
 
     const perCoin = {};
