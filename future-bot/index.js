@@ -7,9 +7,9 @@ const { PaperFuturesTrader } = require('./paperFuturesTrader');
 
 let trader;
 if (process.env.TRADE_MODE === 'LIVE') {
-    console.log("!!! RUNNING IN LIVE TRADING MODE (REAL MONEY, 1% RISK) !!!");
+    console.log("!!! RUNNING IN LIVE TRADING MODE (REAL MONEY, 0.3% RISK) !!!");
     trader = new LiveFuturesTrader();
-    trader.riskPerTrade = 0.01;
+    trader.riskPerTrade = 0.003; // Matches paper trading — increase only after 30+ validated live trades
 } else if (process.env.TRADE_MODE === 'LIVE-SMALL') {
     console.log("!!! RUNNING IN LIVE-SMALL TRADING MODE (REAL MONEY, 0.3% RISK) !!!");
     trader = new LiveFuturesTrader();

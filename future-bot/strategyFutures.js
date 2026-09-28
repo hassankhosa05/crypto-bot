@@ -12,51 +12,6 @@ function calculateVWAP(data) {
     return cumulativeVolume ? cumulativePV / cumulativeVolume : null;
 }
 
-function synthesizeCandle(candles) {
-    const opens = candles.map(c => c.open);
-    const closes = candles.map(c => c.close);
-    const highs = candles.map(c => c.high);
-    const lows = candles.map(c => c.low);
-    const volumes = candles.map(c => c.volume);
-
-    return {
-        timestamp: candles[0].timestamp,
-        open: opens[0],
-        high: Math.max(...highs),
-        low: Math.min(...lows),
-        close: closes[closes.length - 1],
-        volume: volumes.reduce((a, b) => a + b, 0)
-    };
-}
-
-function get1HCandles(historicalData15m) {
-    const candles1H = [];
-    let currentHour = null;
-    let currentCandles = [];
-
-    for (const candle of historicalData15m) {
-        const date = new Date(candle.timestamp);
-        const hour = date.getUTCFullYear() + '-' +
-                     String(date.getUTCMonth() + 1).padStart(2, '0') + '-' +
-                     String(date.getUTCDate()).padStart(2, '0') + ' ' +
-                     String(date.getUTCHours()).padStart(2, '0') + ':00';
-
-        if (currentHour !== hour) {
-            if (currentCandles.length > 0) {
-                candles1H.push(synthesizeCandle(currentCandles));
-            }
-            currentHour = hour;
-            currentCandles = [candle];
-        } else {
-            currentCandles.push(candle);
-        }
-    }
-    if (currentCandles.length > 0) {
-        candles1H.push(synthesizeCandle(currentCandles));
-    }
-    return candles1H;
-}
-
 async function fetchKlines(symbol, interval, limit = 400) {
     const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
     const res = await axios.get(url);
@@ -72,43 +27,47 @@ async function fetchKlines(symbol, interval, limit = 400) {
 
 async function evaluateTrade(symbol, marketRegime, fundingRate) {
     const diag = {
-        timestamp: new Date().toISOString(),
-        symbol: symbol,
-        globalRegime: marketRegime,
-        direction: 'NONE',
-        ema20_1H: null,
-        ema50_1H: null,
-        adx_1H: null,
-        btc15mEma50Relationship: 'UNKNOWN',
-        pullbackStatus: false,
-        rvol: null,
-        rsi_15m: null,
-        atr_15m: null,
-        gate1_pass: false,
-        gate2_pass: false,
-        gate3_pass: false,
-        gate4_pass: false,
-        gate5_pass: false,
-        gate6_pass: false,
-        finalDecision: 'REJECTED',
-        primaryRejectionGate: null,
-        failedReason: ''
+        timestamp:             new Date().toISOString(),
+        symbol:                symbol,
+        globalRegime:          marketRegime,
+        direction:             'NONE',
+        ema20_1H:              null,
+        ema50_1H:              null,
+        adx_1H:                null,
+        atr_1H:                null,
+        coin4hTrend:           'UNKNOWN',
+        pullbackStatus:        false,
+        rvol:                  null,
+        rsi_15m:               null,
+        atr_15m:               null,
+        gate1_pass:            false,
+        gate2_pass:            false,
+        gate3_pass:            false,
+        gate4_pass:            false,
+        gate5_pass:            false,
+        finalDecision:         'REJECTED',
+        primaryRejectionGate:  null,
+        failedReason:          ''
     };
 
     try {
         const isMildChoppy = marketRegime === 'MILD_CHOPPY_BULL' || marketRegime === 'MILD_CHOPPY_BEAR';
 
-        // ── Gate 0: Global Regime Check ─────────────────────────────────
-        if (marketRegime === 'CHOPPY') {
+        // ── Gate 0: Global Regime ─────────────────────────────────────────────
+        // Only trade in strictly BULLISH conditions (BTC 4H ADX > 25, EMA20 > EMA50).
+        // This keeps the trade history clean so we can measure bull performance accurately
+        // before adding strategies for other conditions later.
+        if (marketRegime !== 'BULLISH') {
             diag.primaryRejectionGate = 'Gate 0 (Global Regime)';
-            diag.failedReason = '4H Regime is CHOPPY — no trend trades';
+            diag.failedReason = `Regime is ${marketRegime} — only trading in BULLISH conditions for now`;
             return { signal: 'NONE', reason: diag.failedReason, diag };
         }
 
-        const [klines15m, klines1H, btcKlines15m] = await Promise.all([
+        // ── Fetch all timeframes in parallel ─────────────────────────────────
+        const [klines15m, klines1H, klines4H] = await Promise.all([
             fetchKlines(symbol, '15m', 100),
-            fetchKlines(symbol, '1h', 100),
-            symbol === 'BTCUSDT' ? null : fetchKlines('BTCUSDT', '15m', 100)
+            fetchKlines(symbol, '1h',  100),
+            fetchKlines(symbol, '4h',  60)
         ]);
 
         if (klines15m.length < 50 || klines1H.length < 50) {
@@ -117,27 +76,28 @@ async function evaluateTrade(symbol, marketRegime, fundingRate) {
             return { signal: 'NONE', reason: diag.failedReason, diag };
         }
 
-        // ── 1H Direct Indicators ─────────────────────────────────────────
-        const candles1H = klines1H;
+        // ── 1H Indicators ─────────────────────────────────────────────────────
+        const closes1H = klines1H.map(c => c.close);
+        const highs1H  = klines1H.map(c => c.high);
+        const lows1H   = klines1H.map(c => c.low);
 
-        const closes1H = candles1H.map(c => c.close);
-        const highs1H  = candles1H.map(c => c.high);
-        const lows1H   = candles1H.map(c => c.low);
+        const ema20_1H_arr = EMA.calculate({ period: 20, values: closes1H });
+        const ema50_1H_arr = EMA.calculate({ period: 50, values: closes1H });
+        const adx_1H_arr   = ADX.calculate({ high: highs1H, low: lows1H, close: closes1H, period: 14 });
+        const atr_1H_arr   = ATR.calculate({ high: highs1H, low: lows1H, close: closes1H, period: 14 });
 
-        const ema20_1H = EMA.calculate({ period: 20, values: closes1H });
-        const ema50_1H = EMA.calculate({ period: 50, values: closes1H });
-        const adx_1H   = ADX.calculate({ high: highs1H, low: lows1H, close: closes1H, period: 14 });
-
-        const curEma20_1H = ema20_1H[ema20_1H.length - 1];
-        const curEma50_1H = ema50_1H[ema50_1H.length - 1];
-        const curAdx_1H   = adx_1H[adx_1H.length - 1]?.adx || 0;
+        const curEma20_1H = ema20_1H_arr[ema20_1H_arr.length - 1];
+        const curEma50_1H = ema50_1H_arr[ema50_1H_arr.length - 1];
+        const curAdx_1H   = adx_1H_arr[adx_1H_arr.length - 1]?.adx || 0;
         const curPrice_1H = closes1H[closes1H.length - 1];
+        const curAtr_1H   = atr_1H_arr[atr_1H_arr.length - 1] || 0;
 
         diag.ema20_1H = curEma20_1H ? parseFloat(curEma20_1H.toFixed(4)) : null;
         diag.ema50_1H = curEma50_1H ? parseFloat(curEma50_1H.toFixed(4)) : null;
         diag.adx_1H   = parseFloat(curAdx_1H.toFixed(2));
+        diag.atr_1H   = parseFloat(curAtr_1H.toFixed(4));
 
-        // ── Gate 1: Coin 1H Trend Alignment + ADX ────────────────────────
+        // ── Gate 1: Coin 1H Trend Alignment + ADX ─────────────────────────────
         let coinTrend = 'NONE';
         if (curEma20_1H > curEma50_1H && curPrice_1H > curEma20_1H) coinTrend = 'BULLISH';
         else if (curEma20_1H < curEma50_1H && curPrice_1H < curEma20_1H) coinTrend = 'BEARISH';
@@ -150,10 +110,10 @@ async function evaluateTrade(symbol, marketRegime, fundingRate) {
             return { signal: 'NONE', reason: diag.failedReason, diag };
         }
 
-        const requiredCoinAdx = isMildChoppy ? 30 : 25;
-        if (curAdx_1H < requiredCoinAdx) {
+        const requiredAdx = isMildChoppy ? 30 : 25;
+        if (curAdx_1H < requiredAdx) {
             diag.primaryRejectionGate = 'Gate 1 (1H ADX)';
-            diag.failedReason = `Coin 1H ADX too weak (${curAdx_1H.toFixed(1)} < ${requiredCoinAdx})`;
+            diag.failedReason = `Coin 1H ADX too weak (${curAdx_1H.toFixed(1)} < ${requiredAdx})`;
             return { signal: 'NONE', reason: diag.failedReason, diag };
         }
 
@@ -172,161 +132,160 @@ async function evaluateTrade(symbol, marketRegime, fundingRate) {
         }
         diag.gate1_pass = true;
 
-        // ── Gate 2: 1H Violent Dump / Pump Protection ────────────────────
-        const currentCandle1H = candles1H[candles1H.length - 1];
-        if (currentCandle1H) {
-            const body1H = Math.abs(currentCandle1H.close - currentCandle1H.open);
-            const bodyPct1H = (body1H / currentCandle1H.open) * 100;
-            const is1HDump = currentCandle1H.close < currentCandle1H.open && bodyPct1H > 1.2;
-            const is1HPump = currentCandle1H.close > currentCandle1H.open && bodyPct1H > 1.2;
+        // ── Gate 2: Coin 4H Trend Confirmation ────────────────────────────────
+        // Prevents entering a 1H bullish setup when the 4H is still bearish.
+        // This stops "counter-trend trap" entries — the most common cause of losses.
+        if (klines4H.length >= 55) {
+            const closes4H    = klines4H.map(c => c.close);
+            const ema20_4H    = EMA.calculate({ period: 20, values: closes4H });
+            const ema50_4H    = EMA.calculate({ period: 50, values: closes4H });
+            const curEma20_4H = ema20_4H[ema20_4H.length - 1];
+            const curEma50_4H = ema50_4H[ema50_4H.length - 1];
 
-            if (coinTrend === 'BULLISH' && is1HDump) {
-                diag.primaryRejectionGate = 'Gate 2 (1H Dump Protection)';
-                diag.failedReason = `Coin 1H is in a heavy dump (-${bodyPct1H.toFixed(2)}%) — blocking dead-cat bounce buy`;
+            const coin4hTrend = curEma20_4H > curEma50_4H ? 'BULL' : 'BEAR';
+            diag.coin4hTrend  = coin4hTrend;
+
+            if (coinTrend === 'BULLISH' && coin4hTrend === 'BEAR') {
+                diag.primaryRejectionGate = 'Gate 2 (Coin 4H Regime)';
+                diag.failedReason = 'Coin 4H is BEARISH — 1H bullish signal is a counter-trend trap';
                 return { signal: 'NONE', reason: diag.failedReason, diag };
             }
-            if (coinTrend === 'BEARISH' && is1HPump) {
-                diag.primaryRejectionGate = 'Gate 2 (1H Pump Protection)';
-                diag.failedReason = `Coin 1H is in a heavy pump (+${bodyPct1H.toFixed(2)}%) — blocking shorting into squeeze`;
+            if (coinTrend === 'BEARISH' && coin4hTrend === 'BULL') {
+                diag.primaryRejectionGate = 'Gate 2 (Coin 4H Regime)';
+                diag.failedReason = 'Coin 4H is BULLISH — 1H bearish signal is a counter-trend trap';
                 return { signal: 'NONE', reason: diag.failedReason, diag };
             }
         }
         diag.gate2_pass = true;
 
-        // ── Gate 3: BTC Short-Term (15m EMA50) Alignment ─────────────────
-        const btcKlines = symbol === 'BTCUSDT' ? klines15m : btcKlines15m;
-        if (btcKlines && btcKlines.length >= 55) {
-            const btcCloses = btcKlines.map(k => k.close);
-            const btcEma50 = EMA.calculate({ period: 50, values: btcCloses });
-            const curBtcEma50 = btcEma50[btcEma50.length - 1];
-            const curBtcPrice = btcCloses[btcCloses.length - 1];
-
-            if (curBtcEma50) {
-                diag.btc15mEma50Relationship = curBtcPrice >= curBtcEma50 ? 'ABOVE_EMA50' : 'BELOW_EMA50';
-                if (coinTrend === 'BULLISH' && curBtcPrice < curBtcEma50) {
-                    diag.primaryRejectionGate = 'Gate 3 (BTC 15m Alignment)';
-                    diag.failedReason = `BTC 15m trend is bearish (${curBtcPrice} < EMA50 ${curBtcEma50.toFixed(2)})`;
-                    return { signal: 'NONE', reason: diag.failedReason, diag };
-                }
-                if (coinTrend === 'BEARISH' && curBtcPrice > curBtcEma50) {
-                    diag.primaryRejectionGate = 'Gate 3 (BTC 15m Alignment)';
-                    diag.failedReason = `BTC 15m trend is bullish (${curBtcPrice} > EMA50 ${curBtcEma50.toFixed(2)})`;
-                    return { signal: 'NONE', reason: diag.failedReason, diag };
-                }
-            }
-        }
-        diag.gate3_pass = true;
-
-        // ── 15m Tactical Entry Indicators ───────────────────────────────
+        // ── 15m Tactical Entry Indicators ─────────────────────────────────────
         const closes15m = klines15m.map(k => k.close);
         const highs15m  = klines15m.map(k => k.high);
         const lows15m   = klines15m.map(k => k.low);
-        const opens15m  = klines15m.map(k => k.open);
 
-        const ema21_15m = EMA.calculate({ period: 21, values: closes15m });
-        const rsi_15m   = RSI.calculate({ period: 14, values: closes15m });
-        const atr_15m   = ATR.calculate({ high: highs15m, low: lows15m, close: closes15m, period: 14 });
+        const ema21_15m_arr = EMA.calculate({ period: 21, values: closes15m });
+        const rsi_15m_arr   = RSI.calculate({ period: 14, values: closes15m });
+        const atr_15m_arr   = ATR.calculate({ high: highs15m, low: lows15m, close: closes15m, period: 14 });
 
-        const curEma21_15m = ema21_15m[ema21_15m.length - 1];
-        const curRsi_15m   = rsi_15m[rsi_15m.length - 1] || 50;
-        const prevRsi_15m  = rsi_15m[rsi_15m.length - 2] || 50;
-        const curAtr_15m   = atr_15m[atr_15m.length - 1] || 0;
-
-        const last15m = klines15m[klines15m.length - 1];
-        const vwap = calculateVWAP(klines15m.slice(-Math.min(96, klines15m.length)));
+        const curEma21_15m = ema21_15m_arr[ema21_15m_arr.length - 1];
+        const curRsi_15m   = rsi_15m_arr[rsi_15m_arr.length - 1] || 50;
+        const curAtr_15m   = atr_15m_arr[atr_15m_arr.length - 1] || 0;
+        const vwap         = calculateVWAP(klines15m.slice(-Math.min(96, klines15m.length)));
 
         diag.rsi_15m = parseFloat(curRsi_15m.toFixed(2));
         diag.atr_15m = parseFloat(curAtr_15m.toFixed(4));
 
-        // ── Gate 4: 15m Pullback Location (EMA21 or VWAP) ────────────────
-        const margin = curAtr_15m * 0.2;
-        const nearEma21 = Math.abs(last15m.low - curEma21_15m) <= margin ||
-                          Math.abs(last15m.high - curEma21_15m) <= margin ||
-                          (last15m.low <= curEma21_15m && last15m.high >= curEma21_15m);
-        const nearVwap  = Math.abs(last15m.low - vwap) <= margin ||
-                          Math.abs(last15m.high - vwap) <= margin ||
-                          (last15m.low <= vwap && last15m.high >= vwap);
+        // ── Gate 3: Pullback Entry Timing ──────────────────────────────────────
+        // FIX: We look at the PREVIOUS closed candle for the actual pullback touch,
+        // then confirm the CURRENT forming candle is recovering back in trend direction.
+        // Old approach: entered on the candle that touched EMA21, which is already done.
+        // New approach: enter on the candle AFTER the touch, catching the actual reclaim.
+        const prevCandle = klines15m[klines15m.length - 2]; // fully closed
+        const currCandle = klines15m[klines15m.length - 1]; // currently forming
+        const margin     = curAtr_15m * 0.3;
 
-        diag.pullbackStatus = nearEma21 || nearVwap;
-        if (!nearEma21 && !nearVwap) {
-            diag.primaryRejectionGate = 'Gate 4 (Pullback Location)';
-            diag.failedReason = 'No Pullback to EMA21 or VWAP';
+        // For LONGS: previous candle dipped to/through EMA21 or VWAP (the pullback)
+        const prevTouchedEma  = prevCandle.low  <= curEma21_15m + margin;
+        const prevTouchedVwap = prevCandle.low  <= vwap + margin;
+        // For SHORTS: previous candle bounced up to EMA21 or VWAP (the bounce)
+        const prevBounceEma   = prevCandle.high >= curEma21_15m - margin;
+        const prevBounceVwap  = prevCandle.high >= vwap - margin;
+
+        // Current candle is recovering back into trend direction
+        const currentRecoveringLong  = currCandle.close > curEma21_15m || currCandle.close > vwap;
+        const currentRecoveringShort = currCandle.close < curEma21_15m || currCandle.close < vwap;
+
+        let validPullback = false;
+        if (coinTrend === 'BULLISH') {
+            validPullback = (prevTouchedEma || prevTouchedVwap) && currentRecoveringLong;
+        } else {
+            validPullback = (prevBounceEma || prevBounceVwap) && currentRecoveringShort;
+        }
+
+        diag.pullbackStatus = validPullback;
+        if (!validPullback) {
+            diag.primaryRejectionGate = 'Gate 3 (Pullback Timing)';
+            diag.failedReason = 'No confirmed pullback to EMA21/VWAP with current candle reclaiming';
+            return { signal: 'NONE', reason: diag.failedReason, diag };
+        }
+        diag.gate3_pass = true;
+
+        // ── Gate 4: Funding Rate Sanity & RVOL ────────────────────────────────
+        const volumes15m   = klines15m.map(k => k.volume);
+        const prev20Vol    = volumes15m.slice(-22, -2);
+        const avgVol       = prev20Vol.length > 0 ? prev20Vol.reduce((a, b) => a + b, 0) / prev20Vol.length : 1;
+        const completedVol = volumes15m[volumes15m.length - 2] || volumes15m[volumes15m.length - 1];
+        const rvol         = avgVol > 0 ? completedVol / avgVol : 0;
+        diag.rvol          = parseFloat(rvol.toFixed(2));
+
+        if (coinTrend === 'BULLISH' && fundingRate > 0.001) {
+            diag.primaryRejectionGate = 'Gate 4 (Funding)';
+            diag.failedReason = 'Funding too positive for LONG — trade too crowded';
+            return { signal: 'NONE', reason: diag.failedReason, diag };
+        }
+        if (coinTrend === 'BEARISH' && fundingRate < -0.001) {
+            diag.primaryRejectionGate = 'Gate 4 (Funding)';
+            diag.failedReason = 'Funding too negative for SHORT — trade too crowded';
             return { signal: 'NONE', reason: diag.failedReason, diag };
         }
         diag.gate4_pass = true;
 
-        // ── Gate 5: Funding Rate Sanity & RVOL Measurement ─────────────
-        const volumes15m = klines15m.map(k => k.volume);
-        const prev20Vol  = volumes15m.slice(-22, -2);
-        const avgVol     = prev20Vol.length > 0 ? prev20Vol.reduce((a, b) => a + b, 0) / prev20Vol.length : 1;
-        const completedVol = volumes15m[volumes15m.length - 2] || volumes15m[volumes15m.length - 1];
-        const rvol       = avgVol > 0 ? completedVol / avgVol : 0;
-        diag.rvol        = parseFloat(rvol.toFixed(2));
-
-        // Funding rate sanity check (blocks extreme crowded trades)
-        if (coinTrend === 'BULLISH' && fundingRate > 0.001) {
-            diag.primaryRejectionGate = 'Gate 5 (Funding)';
-            diag.failedReason = 'Funding too positive for LONG';
+        // ── Gate 5: RSI Momentum (loosened window: 40–72) ─────────────────────
+        // Old window was 44–68 — too narrow. Strong trends frequently run RSI 68–72
+        // and valid pullbacks often recover to RSI 40–44. Don't miss those.
+        if (coinTrend === 'BULLISH' && curRsi_15m > 72) {
+            diag.primaryRejectionGate = 'Gate 5 (RSI Overbought)';
+            diag.failedReason = `15m RSI overbought (${curRsi_15m.toFixed(1)} > 72) — skipping exhaustion top`;
             return { signal: 'NONE', reason: diag.failedReason, diag };
         }
-        if (coinTrend === 'BEARISH' && fundingRate < -0.001) {
-            diag.primaryRejectionGate = 'Gate 5 (Funding)';
-            diag.failedReason = 'Funding too negative for SHORT';
+        if (coinTrend === 'BEARISH' && curRsi_15m < 28) {
+            diag.primaryRejectionGate = 'Gate 5 (RSI Oversold)';
+            diag.failedReason = `15m RSI oversold (${curRsi_15m.toFixed(1)} < 28) — skipping deep oversold bottom`;
+            return { signal: 'NONE', reason: diag.failedReason, diag };
+        }
+        if (coinTrend === 'BULLISH' && curRsi_15m < 40) {
+            diag.primaryRejectionGate = 'Gate 5 (RSI Momentum)';
+            diag.failedReason = `15m RSI too weak for LONG (${curRsi_15m.toFixed(1)} < 40)`;
+            return { signal: 'NONE', reason: diag.failedReason, diag };
+        }
+        if (coinTrend === 'BEARISH' && curRsi_15m > 60) {
+            diag.primaryRejectionGate = 'Gate 5 (RSI Momentum)';
+            diag.failedReason = `15m RSI too high for SHORT (${curRsi_15m.toFixed(1)} > 60)`;
             return { signal: 'NONE', reason: diag.failedReason, diag };
         }
         diag.gate5_pass = true;
 
-        // ── Gate 6: Pullback Entry Timing & Exhaustion Guards ───────────
-        // Exhaustion Guards (prevent buying tops >68 or shorting bottoms <32)
-        if (coinTrend === 'BULLISH' && curRsi_15m > 68) {
-            diag.primaryRejectionGate = 'Gate 6 (RSI Overbought)';
-            diag.failedReason = `15m RSI is overbought (${curRsi_15m.toFixed(1)} > 68) — skipping exhaustion top`;
-            return { signal: 'NONE', reason: diag.failedReason, diag };
-        }
-        if (coinTrend === 'BEARISH' && curRsi_15m < 32) {
-            diag.primaryRejectionGate = 'Gate 6 (RSI Oversold)';
-            diag.failedReason = `15m RSI is oversold (${curRsi_15m.toFixed(1)} < 32) — skipping deep oversold bottom`;
-            return { signal: 'NONE', reason: diag.failedReason, diag };
-        }
-
-        // Directional RSI Confirmation (pullback has turned back into trend direction)
-        if (coinTrend === 'BULLISH' && curRsi_15m < 44) {
-            diag.primaryRejectionGate = 'Gate 6 (RSI Momentum)';
-            diag.failedReason = `15m RSI too weak for LONG (${curRsi_15m.toFixed(1)} < 44)`;
-            return { signal: 'NONE', reason: diag.failedReason, diag };
-        }
-        if (coinTrend === 'BEARISH' && curRsi_15m > 56) {
-            diag.primaryRejectionGate = 'Gate 6 (RSI Momentum)';
-            diag.failedReason = `15m RSI too high for SHORT (${curRsi_15m.toFixed(1)} > 56)`;
-            return { signal: 'NONE', reason: diag.failedReason, diag };
-        }
-        diag.gate6_pass = true;
-
-        // ── All Gates Passed: Enter at Pullback / Reclaim Zone ───────────
+        // ── All Gates Passed: Build Trade Signal ──────────────────────────────
         diag.finalDecision = 'ACCEPTED';
-        const slDistance = 1.5 * curAtr_15m;
 
-        // Score: ADX + RVOL boost + candle structure
+        // FIX: Stop loss uses 1H ATR, not 15m ATR.
+        // 15m ATR is ~3–5x smaller than 1H ATR. A single wick on 15m can be
+        // larger than a full 1.5x 15m ATR stop, so you get stopped by noise.
+        // 1H ATR reflects real market movement at the trend timeframe.
+        const slDistance = 2.0 * curAtr_1H;
+
+        // Score: ADX + RVOL + candle structure (for ranking multiple setups)
         let score = curAdx_1H;
         if (rvol >= 1.2) score += 10;
         const highestOf3 = Math.max(...highs15m.slice(-4, -1));
         const lowestOf3  = Math.min(...lows15m.slice(-4, -1));
-        const breakHigh   = last15m.close > highestOf3;
-        const breakLow    = last15m.close < lowestOf3;
-        const bodyPct     = Math.abs(last15m.close - last15m.open) / last15m.open * 100;
-        const strongBull  = last15m.close > last15m.open && bodyPct > 0.2;
-        const strongBear  = last15m.close < last15m.open && bodyPct > 0.2;
+        const breakHigh  = currCandle.close > highestOf3;
+        const breakLow   = currCandle.close < lowestOf3;
+        const bodyPct    = Math.abs(currCandle.close - currCandle.open) / currCandle.open * 100;
+        const strongBull = currCandle.close > currCandle.open && bodyPct > 0.2;
+        const strongBear = currCandle.close < currCandle.open && bodyPct > 0.2;
         if (breakHigh || breakLow) score += 5;
         if (strongBull || strongBear) score += 5;
 
         return {
             signal:   coinTrend === 'BULLISH' ? 'LONG' : 'SHORT',
-            reason:   `Trend: ${coinTrend}, Confirmed by Pullback & Momentum`,
-            price:    last15m.close,
+            reason:   `Trend: ${coinTrend}, Pullback confirmed & reclaiming`,
+            price:    currCandle.close,
             stopLoss: coinTrend === 'BULLISH'
-                        ? last15m.close - slDistance
-                        : last15m.close + slDistance,
-            atr:      curAtr_15m,
+                        ? currCandle.close - slDistance
+                        : currCandle.close + slDistance,
+            atr:      curAtr_1H,    // 1H ATR — used for trailing stop calculations
+            atr15m:   curAtr_15m,   // 15m ATR — kept for reference/diagnostics only
             adx:      curAdx_1H,
             score:    score,
             diag:     diag
