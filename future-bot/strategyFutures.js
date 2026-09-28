@@ -36,6 +36,7 @@ async function evaluateTrade(symbol, marketRegime, fundingRate) {
         adx_1H:                null,
         atr_1H:                null,
         coin4hTrend:           'UNKNOWN',
+        coin4hAdx:             null,
         pullbackStatus:        false,
         rvol:                  null,
         rsi_15m:               null,
@@ -51,12 +52,9 @@ async function evaluateTrade(symbol, marketRegime, fundingRate) {
     };
 
     try {
-        const isMildChoppy = marketRegime === 'MILD_CHOPPY_BULL' || marketRegime === 'MILD_CHOPPY_BEAR';
-
         // ── Gate 0: Global Regime ─────────────────────────────────────────────
         // Only trade in strictly BULLISH conditions (BTC 4H ADX > 25, EMA20 > EMA50).
-        // This keeps the trade history clean so we can measure bull performance accurately
-        // before adding strategies for other conditions later.
+        // Keeps trade history clean — no noise from choppy or bearish periods.
         if (marketRegime !== 'BULLISH') {
             diag.primaryRejectionGate = 'Gate 0 (Global Regime)';
             diag.failedReason = `Regime is ${marketRegime} — only trading in BULLISH conditions for now`;
@@ -110,49 +108,51 @@ async function evaluateTrade(symbol, marketRegime, fundingRate) {
             return { signal: 'NONE', reason: diag.failedReason, diag };
         }
 
-        const requiredAdx = isMildChoppy ? 30 : 25;
-        if (curAdx_1H < requiredAdx) {
+        if (curAdx_1H < 25) {
             diag.primaryRejectionGate = 'Gate 1 (1H ADX)';
-            diag.failedReason = `Coin 1H ADX too weak (${curAdx_1H.toFixed(1)} < ${requiredAdx})`;
+            diag.failedReason = `Coin 1H ADX too weak (${curAdx_1H.toFixed(1)} < 25)`;
             return { signal: 'NONE', reason: diag.failedReason, diag };
         }
 
-        const regimeWantsBull = marketRegime === 'BULLISH' || marketRegime === 'MILD_CHOPPY_BULL';
-        const regimeWantsBear = marketRegime === 'BEARISH' || marketRegime === 'MILD_CHOPPY_BEAR';
-
-        if (regimeWantsBull && coinTrend === 'BEARISH') {
+        // Since Gate 0 only allows BULLISH regime, we only take LONG signals.
+        // Reject BEARISH coin trends — they conflict with the global bull regime.
+        if (coinTrend === 'BEARISH') {
             diag.primaryRejectionGate = 'Gate 1 (Regime Alignment)';
-            diag.failedReason = 'Coin trend conflicts with global BULLISH bias';
-            return { signal: 'NONE', reason: diag.failedReason, diag };
-        }
-        if (regimeWantsBear && coinTrend === 'BULLISH') {
-            diag.primaryRejectionGate = 'Gate 1 (Regime Alignment)';
-            diag.failedReason = 'Coin trend conflicts with global BEARISH bias';
+            diag.failedReason = 'Coin trend is BEARISH — conflicts with global BULLISH regime';
             return { signal: 'NONE', reason: diag.failedReason, diag };
         }
         diag.gate1_pass = true;
 
-        // ── Gate 2: Coin 4H Trend Confirmation ────────────────────────────────
-        // Prevents entering a 1H bullish setup when the 4H is still bearish.
-        // This stops "counter-trend trap" entries — the most common cause of losses.
+        // ── Gate 2: Coin 4H Trend Confirmation + ADX ──────────────────────────
+        // FIX (from review): EMA20 > EMA50 alone is not sufficient — EMAs can be
+        // tangled during sideways consolidation. Require 4H ADX > 20 to confirm
+        // the 4H trend has real established momentum before taking 15m entries.
         if (klines4H.length >= 55) {
-            const closes4H    = klines4H.map(c => c.close);
-            const ema20_4H    = EMA.calculate({ period: 20, values: closes4H });
-            const ema50_4H    = EMA.calculate({ period: 50, values: closes4H });
-            const curEma20_4H = ema20_4H[ema20_4H.length - 1];
-            const curEma50_4H = ema50_4H[ema50_4H.length - 1];
+            const closes4H = klines4H.map(c => c.close);
+            const highs4H  = klines4H.map(c => c.high);
+            const lows4H   = klines4H.map(c => c.low);
+
+            const ema20_4H_arr = EMA.calculate({ period: 20, values: closes4H });
+            const ema50_4H_arr = EMA.calculate({ period: 50, values: closes4H });
+            const adx_4H_arr   = ADX.calculate({ high: highs4H, low: lows4H, close: closes4H, period: 14 });
+
+            const curEma20_4H = ema20_4H_arr[ema20_4H_arr.length - 1];
+            const curEma50_4H = ema50_4H_arr[ema50_4H_arr.length - 1];
+            const curAdx_4H   = adx_4H_arr[adx_4H_arr.length - 1]?.adx || 0;
 
             const coin4hTrend = curEma20_4H > curEma50_4H ? 'BULL' : 'BEAR';
             diag.coin4hTrend  = coin4hTrend;
+            diag.coin4hAdx    = parseFloat(curAdx_4H.toFixed(2));
 
-            if (coinTrend === 'BULLISH' && coin4hTrend === 'BEAR') {
-                diag.primaryRejectionGate = 'Gate 2 (Coin 4H Regime)';
+            if (coin4hTrend === 'BEAR') {
+                diag.primaryRejectionGate = 'Gate 2 (Coin 4H Trend)';
                 diag.failedReason = 'Coin 4H is BEARISH — 1H bullish signal is a counter-trend trap';
                 return { signal: 'NONE', reason: diag.failedReason, diag };
             }
-            if (coinTrend === 'BEARISH' && coin4hTrend === 'BULL') {
-                diag.primaryRejectionGate = 'Gate 2 (Coin 4H Regime)';
-                diag.failedReason = 'Coin 4H is BULLISH — 1H bearish signal is a counter-trend trap';
+
+            if (curAdx_4H < 20) {
+                diag.primaryRejectionGate = 'Gate 2 (Coin 4H ADX)';
+                diag.failedReason = `Coin 4H ADX too weak (${curAdx_4H.toFixed(1)} < 20) — 4H trend has no real momentum yet`;
                 return { signal: 'NONE', reason: diag.failedReason, diag };
             }
         }
@@ -167,45 +167,56 @@ async function evaluateTrade(symbol, marketRegime, fundingRate) {
         const rsi_15m_arr   = RSI.calculate({ period: 14, values: closes15m });
         const atr_15m_arr   = ATR.calculate({ high: highs15m, low: lows15m, close: closes15m, period: 14 });
 
-        const curEma21_15m = ema21_15m_arr[ema21_15m_arr.length - 1];
-        const curRsi_15m   = rsi_15m_arr[rsi_15m_arr.length - 1] || 50;
-        const curAtr_15m   = atr_15m_arr[atr_15m_arr.length - 1] || 0;
-        const vwap         = calculateVWAP(klines15m.slice(-Math.min(96, klines15m.length)));
+        const curEma21_15m  = ema21_15m_arr[ema21_15m_arr.length - 1];
+        const prevEma21_15m = ema21_15m_arr[ema21_15m_arr.length - 2]; // FIX: EMA at time of prev candle
+        const curRsi_15m    = rsi_15m_arr[rsi_15m_arr.length - 1] || 50;
+        const curAtr_15m    = atr_15m_arr[atr_15m_arr.length - 1] || 0;
+        const vwap          = calculateVWAP(klines15m.slice(-Math.min(96, klines15m.length)));
 
         diag.rsi_15m = parseFloat(curRsi_15m.toFixed(2));
         diag.atr_15m = parseFloat(curAtr_15m.toFixed(4));
 
         // ── Gate 3: Pullback Entry Timing ──────────────────────────────────────
-        // FIX: We look at the PREVIOUS closed candle for the actual pullback touch,
-        // then confirm the CURRENT forming candle is recovering back in trend direction.
-        // Old approach: entered on the candle that touched EMA21, which is already done.
-        // New approach: enter on the candle AFTER the touch, catching the actual reclaim.
+        // We look at the PREVIOUS closed candle for the actual pullback touch,
+        // then confirm the CURRENT forming candle is recovering back above.
+        //
+        // FIX 1 (from review): Compare prevCandle.low to prevEma21_15m (not curEma21_15m).
+        //        The EMA was at a different level when that candle formed.
+        //
+        // FIX 2 (from review): Require the previous candle to have TOUCHED EMA21 but
+        //        NOT CLOSED significantly below it. A candle closing 2% below EMA21
+        //        is a breakdown, not a pullback — don't trade it.
+        //
+        // FIX 3 (from review): Require the current candle to be bullish (close > open)
+        //        AND above EMA21. Prevents entering on a candle that looks like
+        //        recovery mid-formation but keeps falling.
         const prevCandle = klines15m[klines15m.length - 2]; // fully closed
         const currCandle = klines15m[klines15m.length - 1]; // currently forming
         const margin     = curAtr_15m * 0.3;
 
-        // For LONGS: previous candle dipped to/through EMA21 or VWAP (the pullback)
-        const prevTouchedEma  = prevCandle.low  <= curEma21_15m + margin;
-        const prevTouchedVwap = prevCandle.low  <= vwap + margin;
-        // For SHORTS: previous candle bounced up to EMA21 or VWAP (the bounce)
-        const prevBounceEma   = prevCandle.high >= curEma21_15m - margin;
-        const prevBounceVwap  = prevCandle.high >= vwap - margin;
+        // Prev candle wicked to EMA21 (using the EMA level at that time)
+        const prevTouchedEma  = prevCandle.low <= prevEma21_15m + margin;
+        const prevTouchedVwap = prevCandle.low <= vwap + margin;
 
-        // Current candle is recovering back into trend direction
-        const currentRecoveringLong  = currCandle.close > curEma21_15m || currCandle.close > vwap;
-        const currentRecoveringShort = currCandle.close < curEma21_15m || currCandle.close < vwap;
+        // Prev candle didn't close significantly below EMA21 (breakdown protection)
+        // Allows wicks through EMA21 but not a dump candle closing 0.5 ATR below
+        const prevNotDumpedThroughEma  = prevCandle.close >= prevEma21_15m - (curAtr_15m * 0.5);
+        const prevNotDumpedThroughVwap = prevCandle.close >= vwap - (curAtr_15m * 0.5);
 
-        let validPullback = false;
-        if (coinTrend === 'BULLISH') {
-            validPullback = (prevTouchedEma || prevTouchedVwap) && currentRecoveringLong;
-        } else {
-            validPullback = (prevBounceEma || prevBounceVwap) && currentRecoveringShort;
-        }
+        // Current candle is bullish AND price has reclaimed EMA21 — not just briefly touching
+        const currentBullish   = currCandle.close > currCandle.open;
+        const currentAboveEma  = currCandle.close > curEma21_15m;
+        const currentAboveVwap = currCandle.close > vwap;
+        const currentRecovering = currentBullish && (currentAboveEma || currentAboveVwap);
+
+        const validEma  = prevTouchedEma  && prevNotDumpedThroughEma  && currentAboveEma;
+        const validVwap = prevTouchedVwap && prevNotDumpedThroughVwap && currentAboveVwap;
+        const validPullback = (validEma || validVwap) && currentBullish;
 
         diag.pullbackStatus = validPullback;
         if (!validPullback) {
             diag.primaryRejectionGate = 'Gate 3 (Pullback Timing)';
-            diag.failedReason = 'No confirmed pullback to EMA21/VWAP with current candle reclaiming';
+            diag.failedReason = 'No confirmed pullback to EMA21/VWAP with current candle reclaiming bullishly';
             return { signal: 'NONE', reason: diag.failedReason, diag };
         }
         diag.gate3_pass = true;
@@ -218,39 +229,22 @@ async function evaluateTrade(symbol, marketRegime, fundingRate) {
         const rvol         = avgVol > 0 ? completedVol / avgVol : 0;
         diag.rvol          = parseFloat(rvol.toFixed(2));
 
-        if (coinTrend === 'BULLISH' && fundingRate > 0.001) {
+        if (fundingRate > 0.001) {
             diag.primaryRejectionGate = 'Gate 4 (Funding)';
             diag.failedReason = 'Funding too positive for LONG — trade too crowded';
             return { signal: 'NONE', reason: diag.failedReason, diag };
         }
-        if (coinTrend === 'BEARISH' && fundingRate < -0.001) {
-            diag.primaryRejectionGate = 'Gate 4 (Funding)';
-            diag.failedReason = 'Funding too negative for SHORT — trade too crowded';
-            return { signal: 'NONE', reason: diag.failedReason, diag };
-        }
         diag.gate4_pass = true;
 
-        // ── Gate 5: RSI Momentum (loosened window: 40–72) ─────────────────────
-        // Old window was 44–68 — too narrow. Strong trends frequently run RSI 68–72
-        // and valid pullbacks often recover to RSI 40–44. Don't miss those.
-        if (coinTrend === 'BULLISH' && curRsi_15m > 72) {
+        // ── Gate 5: RSI Momentum (window: 40–72) ──────────────────────────────
+        if (curRsi_15m > 72) {
             diag.primaryRejectionGate = 'Gate 5 (RSI Overbought)';
             diag.failedReason = `15m RSI overbought (${curRsi_15m.toFixed(1)} > 72) — skipping exhaustion top`;
             return { signal: 'NONE', reason: diag.failedReason, diag };
         }
-        if (coinTrend === 'BEARISH' && curRsi_15m < 28) {
-            diag.primaryRejectionGate = 'Gate 5 (RSI Oversold)';
-            diag.failedReason = `15m RSI oversold (${curRsi_15m.toFixed(1)} < 28) — skipping deep oversold bottom`;
-            return { signal: 'NONE', reason: diag.failedReason, diag };
-        }
-        if (coinTrend === 'BULLISH' && curRsi_15m < 40) {
+        if (curRsi_15m < 40) {
             diag.primaryRejectionGate = 'Gate 5 (RSI Momentum)';
-            diag.failedReason = `15m RSI too weak for LONG (${curRsi_15m.toFixed(1)} < 40)`;
-            return { signal: 'NONE', reason: diag.failedReason, diag };
-        }
-        if (coinTrend === 'BEARISH' && curRsi_15m > 60) {
-            diag.primaryRejectionGate = 'Gate 5 (RSI Momentum)';
-            diag.failedReason = `15m RSI too high for SHORT (${curRsi_15m.toFixed(1)} > 60)`;
+            diag.failedReason = `15m RSI too weak (${curRsi_15m.toFixed(1)} < 40) — momentum not confirmed`;
             return { signal: 'NONE', reason: diag.failedReason, diag };
         }
         diag.gate5_pass = true;
@@ -258,34 +252,30 @@ async function evaluateTrade(symbol, marketRegime, fundingRate) {
         // ── All Gates Passed: Build Trade Signal ──────────────────────────────
         diag.finalDecision = 'ACCEPTED';
 
-        // FIX: Stop loss uses 1H ATR, not 15m ATR.
-        // 15m ATR is ~3–5x smaller than 1H ATR. A single wick on 15m can be
-        // larger than a full 1.5x 15m ATR stop, so you get stopped by noise.
-        // 1H ATR reflects real market movement at the trend timeframe.
-        const slDistance = 2.0 * curAtr_1H;
+        // FIX (from review): Stop loss uses 15m ATR — NOT 1H ATR.
+        // Using 1H ATR broke the R-multiple math in liveTrader.js.
+        // +1.5R with a 1H ATR stop would require a massive swing-trade sized move
+        // from a 15m entry — nearly impossible. Back to 15m ATR, but WIDER (2.0x
+        // instead of original 1.5x) to give breathing room against 15m noise.
+        const slDistance = 2.0 * curAtr_15m;
 
-        // Score: ADX + RVOL + candle structure (for ranking multiple setups)
+        // Score: ADX + RVOL + candle structure
         let score = curAdx_1H;
         if (rvol >= 1.2) score += 10;
         const highestOf3 = Math.max(...highs15m.slice(-4, -1));
-        const lowestOf3  = Math.min(...lows15m.slice(-4, -1));
         const breakHigh  = currCandle.close > highestOf3;
-        const breakLow   = currCandle.close < lowestOf3;
         const bodyPct    = Math.abs(currCandle.close - currCandle.open) / currCandle.open * 100;
         const strongBull = currCandle.close > currCandle.open && bodyPct > 0.2;
-        const strongBear = currCandle.close < currCandle.open && bodyPct > 0.2;
-        if (breakHigh || breakLow) score += 5;
-        if (strongBull || strongBear) score += 5;
+        if (breakHigh)   score += 5;
+        if (strongBull)  score += 5;
 
         return {
-            signal:   coinTrend === 'BULLISH' ? 'LONG' : 'SHORT',
-            reason:   `Trend: ${coinTrend}, Pullback confirmed & reclaiming`,
+            signal:   'LONG',
+            reason:   `Bullish trend confirmed, pullback to EMA21/VWAP reclaimed`,
             price:    currCandle.close,
-            stopLoss: coinTrend === 'BULLISH'
-                        ? currCandle.close - slDistance
-                        : currCandle.close + slDistance,
-            atr:      curAtr_1H,    // 1H ATR — used for trailing stop calculations
-            atr15m:   curAtr_15m,   // 15m ATR — kept for reference/diagnostics only
+            stopLoss: currCandle.close - slDistance,
+            atr:      curAtr_15m,   // 15m ATR — consistent with R-multiple logic in liveTrader
+            atr_1H:   curAtr_1H,    // 1H ATR — available for reference/diagnostics
             adx:      curAdx_1H,
             score:    score,
             diag:     diag
